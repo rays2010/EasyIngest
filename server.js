@@ -210,6 +210,9 @@ function detectEpisodeMeta(normalizedName) {
   return null;
 }
 
+const EXCLUDED_SCAN_DIR_NAMES = new Set(['云盘缓存文件']);
+const MIN_SCAN_FILE_SIZE_BYTES = 1 * 1024 * 1024;
+
 async function walkFiles(dir) {
   const out = [];
   const queue = [dir];
@@ -220,8 +223,15 @@ async function walkFiles(dir) {
     for (const entry of entries) {
       const full = path.join(current, entry.name);
       if (entry.isDirectory()) {
+        if (EXCLUDED_SCAN_DIR_NAMES.has(entry.name)) {
+          continue;
+        }
         queue.push(full);
       } else if (entry.isFile()) {
+        const stat = await fs.stat(full);
+        if (stat.size < MIN_SCAN_FILE_SIZE_BYTES) {
+          continue;
+        }
         out.push(full);
       }
     }
