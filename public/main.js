@@ -80,6 +80,14 @@ function aggregateStatus(entries) {
   return 'pending';
 }
 
+function formatBytes(bytes) {
+  const n = Number(bytes) || 0;
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
 function buildDisplayRows(task) {
   const entries = task.entries || [];
   const groups = new Map();
@@ -148,7 +156,11 @@ function renderTask() {
     const done = state.task.applyDone || 0;
     const all = state.task.applyTotal || 0;
     const current = state.task.currentApplyFile || '-';
-    summaryEl.textContent = `任务ID: ${state.task.id} | 正在执行 ${done}/${all} | 当前：${current}`;
+    const filePercent = all > 0 ? ((done / all) * 100).toFixed(1) : '0.0';
+    const doneBytes = (state.task.applyBytesDone || 0) + (state.task.currentApplyFileBytesDone || 0);
+    const totalBytes = state.task.applyBytesTotal || 0;
+    const bytePercent = totalBytes > 0 ? ((doneBytes / totalBytes) * 100).toFixed(1) : '0.0';
+    summaryEl.textContent = `任务ID: ${state.task.id} | 正在执行 ${done}/${all} (${filePercent}%) | 数据进度 ${formatBytes(doneBytes)}/${formatBytes(totalBytes)} (${bytePercent}%) | 当前：${current}`;
     scanBtn.disabled = true;
     recomputeBtn.disabled = true;
     applyBtn.disabled = true;

@@ -84,6 +84,7 @@ const TYPE_TO_DIR = {
 const AI_REQUEST_TIMEOUT_MS = Number(process.env.AI_REQUEST_TIMEOUT_MS || 8000);
 const AI_CIRCUIT_BREAK_MS = Number(process.env.AI_CIRCUIT_BREAK_MS || 300000);
 const SCAN_CONCURRENCY = Number(process.env.SCAN_CONCURRENCY || 4);
+const APPLY_PROGRESS_SAVE_INTERVAL_MS = Number(process.env.APPLY_PROGRESS_SAVE_INTERVAL_MS || 400);
 let aiCircuitOpenUntil = 0;
 
 app.use(express.json({ limit: '5mb' }));
@@ -698,6 +699,10 @@ async function createTask({ inputDir, outputDir, taskId = crypto.randomUUID(), o
     applyStatus: 'idle',
     applyTotal: 0,
     applyDone: 0,
+    applyBytesTotal: 0,
+    applyBytesDone: 0,
+    currentApplyFileBytes: 0,
+    currentApplyFileBytesDone: 0,
     currentApplyFile: '',
     applyError: '',
     lastApplyResult: null
@@ -875,9 +880,13 @@ async function ensureParentDir(filePath) {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
 }
 
-async function moveFileWithFallback(sourcePath, targetPath) {
+async function moveFileWithFallback(sourcePath, targetPath, onProgress = null) {
   try {
     await fs.rename(sourcePath, targetPath);
+    if (onProgress) {
+      const stat = await fs.stat(targetPath);
+      await onProgress(stat.size);
+    }
     return;
   } catch (err) {
     if (err?.code !== 'EXDEV') {
@@ -885,7 +894,34 @@ async function moveFileWithFallback(sourcePath, targetPath) {
     }
   }
 
-  await fs.copyFile(sourcePath, targetPath);
+  const sourceHandle = await fs.open(sourcePath, 'r');
+  const targetHandle = await fs.open(targetPath, 'w');
+  const buffer = Buffer.allocUnsafe(4 * 1024 * 1024);
+  try {
+    while (true) {
+      const { bytesRead } = await sourceHandle.read(buffer, 0, buffer.length, null);
+      if (!bytesRead) {
+        break;
+      }
+      await targetHandle.write(buffer, 0, bytesRead, null);
+      if (onProgress) {
+        await onProgress(bytesRead);
+      }
+    }
+  } catch (err) {
+    try {
+      await targetHandle.close();
+    } catch {}
+    try {
+      await sourceHandle.close();
+    } catch {}
+    try {
+      await fs.unlink(targetPath);
+    } catch {}
+    throw err;
+  }
+  await targetHandle.close();
+  await sourceHandle.close();
   await fs.unlink(sourcePath);
 }
 
@@ -1049,8 +1085,13 @@ async function applyTask(task) {
   };
 
   task.applyStatus = 'running';
-  task.applyTotal = task.entries.filter((e) => e.selected).length;
+  const selectedEntries = task.entries.filter((e) => e.selected);
+  task.applyTotal = selectedEntries.length;
   task.applyDone = 0;
+  task.applyBytesTotal = selectedEntries.reduce((sum, e) => sum + (toSafeInt(e.size) || 0), 0);
+  task.applyBytesDone = 0;
+  task.currentApplyFileBytes = 0;
+  task.currentApplyFileBytesDone = 0;
   task.currentApplyFile = '';
   task.applyError = '';
   await saveTask(task);
@@ -1066,11 +1107,24 @@ async function applyTask(task) {
 
     try {
       task.currentApplyFile = entry.sourceName;
+      task.currentApplyFileBytes = toSafeInt(entry.size) || 0;
+      task.currentApplyFileBytesDone = 0;
       await saveTask(task);
       const sourceParentDir = path.dirname(entry.sourcePath);
       const finalPath = await uniquePath(entry.target.fullPath);
       await ensureParentDir(finalPath);
-      await moveFileWithFallback(entry.sourcePath, finalPath);
+      let movedBytesForCurrent = 0;
+      let lastSavedAt = Date.now();
+      await moveFileWithFallback(entry.sourcePath, finalPath, async (chunkBytes) => {
+        movedBytesForCurrent += chunkBytes;
+        task.currentApplyFileBytesDone = movedBytesForCurrent;
+        const now = Date.now();
+        if (now - lastSavedAt >= APPLY_PROGRESS_SAVE_INTERVAL_MS) {
+          await saveTask(task);
+          lastSavedAt = now;
+        }
+      });
+      task.currentApplyFileBytesDone = task.currentApplyFileBytes;
       const movedSubtitles = await moveSidecarSubtitles(entry, finalPath);
       if (isWithinDir(sourceParentDir, task.inputDir) && sourceParentDir !== path.resolve(task.inputDir)) {
         await removeEmptyParentDirs(sourceParentDir, task.inputDir);
@@ -1086,6 +1140,9 @@ async function applyTask(task) {
         subtitlesMoved: movedSubtitles.length
       });
       task.applyDone += 1;
+      task.applyBytesDone += toSafeInt(entry.size) || 0;
+      task.currentApplyFileBytes = 0;
+      task.currentApplyFileBytesDone = 0;
       await saveTask(task);
     } catch (err) {
       entry.status = 'failed';
@@ -1094,11 +1151,15 @@ async function applyTask(task) {
       result.details.push({ entryId: entry.id, status: 'failed', reason: err.message });
       await logLine(`[ERROR] apply failed ${entry.sourcePath}: ${err.message}`);
       task.applyDone += 1;
+      task.currentApplyFileBytes = 0;
+      task.currentApplyFileBytesDone = 0;
       await saveTask(task);
     }
   }
 
   task.applyStatus = 'completed';
+  task.currentApplyFileBytes = 0;
+  task.currentApplyFileBytesDone = 0;
   task.currentApplyFile = '';
   task.applyError = '';
   task.lastApplyResult = result;
@@ -1134,6 +1195,10 @@ app.post('/api/scan', async (req, res) => {
       applyStatus: 'idle',
       applyTotal: 0,
       applyDone: 0,
+      applyBytesTotal: 0,
+      applyBytesDone: 0,
+      currentApplyFileBytes: 0,
+      currentApplyFileBytesDone: 0,
       currentApplyFile: '',
       applyError: '',
       lastApplyResult: null
@@ -1225,8 +1290,13 @@ app.post('/api/tasks/:id/apply', async (req, res) => {
     }
 
     task.applyStatus = 'running';
-    task.applyTotal = task.entries.filter((e) => e.selected).length;
+    const selectedEntries = task.entries.filter((e) => e.selected);
+    task.applyTotal = selectedEntries.length;
     task.applyDone = 0;
+    task.applyBytesTotal = selectedEntries.reduce((sum, e) => sum + (toSafeInt(e.size) || 0), 0);
+    task.applyBytesDone = 0;
+    task.currentApplyFileBytes = 0;
+    task.currentApplyFileBytesDone = 0;
     task.currentApplyFile = '';
     task.applyError = '';
     task.lastApplyResult = null;
@@ -1241,6 +1311,8 @@ app.post('/api/tasks/:id/apply', async (req, res) => {
         try {
           const failedTask = await readTask(task.id);
           failedTask.applyStatus = 'failed';
+          failedTask.currentApplyFileBytes = 0;
+          failedTask.currentApplyFileBytesDone = 0;
           failedTask.currentApplyFile = '';
           failedTask.applyError = err.message;
           await saveTask(failedTask);
