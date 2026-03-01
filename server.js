@@ -164,6 +164,7 @@ function stripNoiseTokens(text) {
   let t = String(text || '');
 
   // Remove common release wrappers and web/source noise.
+  t = t.replace(/\[[^\]]*(?:www|https?|com|net|org|cc|tv|论坛|发布|字幕组|电影|资源)[^\]]*\]/gi, ' ');
   t = t.replace(/\[[^\]]*(?:www\.|https?:\/\/|\.com|\.net|\.org|\.cc|\.tv|最新网址|论坛|字幕组)[^\]]*\]/gi, ' ');
   t = t.replace(/\([^\)]*(?:www\.|https?:\/\/|\.com|\.net|\.org|\.cc|\.tv)[^\)]*\)/gi, ' ');
   t = t.replace(/https?:\/\/\S+/gi, ' ');
@@ -354,7 +355,7 @@ async function parseSeriesGroupByAI(fileNames, cleanedHints, folderHintName, cle
     return {
       title: fallback.title,
       year: fallback.year,
-      type: fallback.type || 'tv',
+      type: 'tv',
       confidence: 0.4,
       source: 'heuristic-group'
     };
@@ -406,7 +407,7 @@ async function parseSeriesGroupByAI(fileNames, cleanedHints, folderHintName, cle
     return {
       title: fallback.title,
       year: fallback.year,
-      type: fallback.type || 'tv',
+      type: 'tv',
       confidence: 0.4,
       source: 'heuristic-group'
     };
