@@ -160,6 +160,33 @@ function cleanName(name) {
   return name.replace(/[\\/:*?"<>|]/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
+function detectEpisodeMeta(normalizedName) {
+  const sxe = normalizedName.match(/[Ss](\d{1,2})[Ee](\d{1,3})/);
+  if (sxe) {
+    return { season: Number(sxe[1]), episode: Number(sxe[2]), pattern: 'sxe' };
+  }
+
+  const zhEpisode = normalizedName.match(/第\s*(\d{1,3})\s*[集话話]/i);
+  if (zhEpisode) {
+    return { season: 1, episode: Number(zhEpisode[1]), pattern: 'zh' };
+  }
+
+  const ep = normalizedName.match(/(?:^|[\s._-])(?:ep?|e)\s*(\d{1,3})(?:[\s._-]|$)/i);
+  if (ep) {
+    return { season: 1, episode: Number(ep[1]), pattern: 'ep' };
+  }
+
+  const pureIndex = normalizedName.trim().match(/^0*(\d{1,3})$/);
+  if (pureIndex) {
+    const n = Number(pureIndex[1]);
+    if (n > 0 && n <= 199) {
+      return { season: 1, episode: n, pattern: 'index' };
+    }
+  }
+
+  return null;
+}
+
 async function walkFiles(dir) {
   const out = [];
   const queue = [dir];
@@ -183,25 +210,32 @@ function parseByHeuristic(filename) {
   const noExt = filename.replace(/\.[^.]+$/, '');
   const normalized = noExt.replace(/[._]/g, ' ');
   const yearMatch = normalized.match(/(?:19|20)\d{2}/);
-  const seasonEpisode = normalized.match(/[Ss](\d{1,2})[Ee](\d{1,2})/);
+  const episodeMeta = detectEpisodeMeta(normalized);
 
   let type = 'movie';
-  if (seasonEpisode) {
+  if (episodeMeta) {
     type = 'tv';
   }
 
-  const title = cleanName(
-    normalized
-      .replace(/[Ss]\d{1,2}[Ee]\d{1,2}.*/, '')
-      .replace(/(?:19|20)\d{2}.*/, '')
-  ) || cleanName(noExt);
+  let titleBase = normalized;
+  if (episodeMeta?.pattern === 'sxe') {
+    titleBase = titleBase.replace(/[Ss]\d{1,2}[Ee]\d{1,3}.*/, '');
+  } else if (episodeMeta?.pattern === 'zh') {
+    titleBase = titleBase.replace(/第\s*\d{1,3}\s*[集话話].*/i, '');
+  } else if (episodeMeta?.pattern === 'ep') {
+    titleBase = titleBase.replace(/(?:^|[\s._-])(?:ep?|e)\s*\d{1,3}.*/i, '');
+  } else if (episodeMeta?.pattern === 'index') {
+    titleBase = '';
+  }
+  titleBase = titleBase.replace(/(?:19|20)\d{2}.*/, '');
+  const title = cleanName(titleBase) || (episodeMeta ? '' : cleanName(noExt));
 
   return {
     title,
     year: yearMatch ? Number(yearMatch[0]) : null,
     type,
-    season: seasonEpisode ? Number(seasonEpisode[1]) : null,
-    episode: seasonEpisode ? Number(seasonEpisode[2]) : null,
+    season: episodeMeta ? Number(episodeMeta.season) : null,
+    episode: episodeMeta ? Number(episodeMeta.episode) : null,
     confidence: 0.4,
     source: 'heuristic'
   };
