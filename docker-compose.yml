@@ -1,0 +1,16 @@
+services:
+  easyingest:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: easyingest
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "${PORT:-3000}:3000"
+    volumes:
+      - ./tasks:/app/tasks
+      - ./logs:/app/logs
+      - ${INPUT_HOST_DIR:-/volume3/docker/easyingest/input}:/data/input
+      - ${OUTPUT_HOST_DIR:-/volume3/docker/easyingest/output}:/data/output

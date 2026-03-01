@@ -2,7 +2,7 @@
 
 本地网页工具：扫描视频文件 -> AI 建议命名/分类 -> 人工编辑确认 -> 执行重命名和移动。
 
-## 运行
+## 本地开发
 
 ```bash
 npm install
@@ -36,6 +36,47 @@ PORT=3000
 也可以继续用命令行 `export` 环境变量覆盖 `.env` 中的值。
 其中 `INPUT_DIR` 和 `OUTPUT_DIR` 配置后，页面会自动回填，扫描时可不手动输入。
 `TITLE_LANGUAGE` 用于统一片名语言：`zh`（中文）或 `en`（英文）。
+
+## NAS Docker 部署
+
+1. 在 NAS（示例路径 `/volume3/docker/easyingest`）准备目录：
+
+```bash
+mkdir -p /volume3/docker/easyingest/{input,output,tasks,logs}
+```
+
+2. 复制环境变量并按需修改：
+
+```bash
+cp .env.example .env
+```
+
+`.env` 中推荐保持容器内目录如下：
+
+```bash
+INPUT_DIR=/data/input
+OUTPUT_DIR=/data/output
+```
+
+并设置 NAS 主机挂载目录：
+
+```bash
+INPUT_HOST_DIR=/volume3/docker/easyingest/input
+OUTPUT_HOST_DIR=/volume3/docker/easyingest/output
+```
+
+3. 启动：
+
+```bash
+docker compose up -d --build
+```
+
+4. 更新代码后重建：
+
+```bash
+git pull
+docker compose up -d --build
+```
 
 ## 规则
 
