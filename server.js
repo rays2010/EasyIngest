@@ -655,10 +655,31 @@ async function readTask(taskId) {
   return JSON.parse(text);
 }
 
+const taskSaveQueues = new Map();
+
 async function saveTask(task) {
-  const file = path.join(TASK_DIR, `${task.id}.json`);
+  const taskId = task.id;
+  const file = path.join(TASK_DIR, `${taskId}.json`);
   task.updatedAt = nowISO();
-  await fs.writeFile(file, `${JSON.stringify(task, null, 2)}\n`, 'utf8');
+  const data = `${JSON.stringify(task, null, 2)}\n`;
+  const tmpFile = `${file}.tmp`;
+
+  const prev = taskSaveQueues.get(taskId) || Promise.resolve();
+  const next = prev
+    .catch(() => {})
+    .then(async () => {
+      await fs.writeFile(tmpFile, data, 'utf8');
+      await fs.rename(tmpFile, file);
+    });
+
+  taskSaveQueues.set(taskId, next);
+  try {
+    await next;
+  } finally {
+    if (taskSaveQueues.get(taskId) === next) {
+      taskSaveQueues.delete(taskId);
+    }
+  }
 }
 
 async function createTask({ inputDir, outputDir, taskId = crypto.randomUUID(), onProgress = null }) {
