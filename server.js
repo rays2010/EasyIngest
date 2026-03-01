@@ -214,6 +214,21 @@ const EXCLUDED_SCAN_DIR_KEYWORDS = ['云盘缓存文件', '.drive', '@eaDir', '#
 const NORMALIZED_EXCLUDED_SCAN_DIR_KEYWORDS = EXCLUDED_SCAN_DIR_KEYWORDS
   .map((k) => String(k || '').normalize('NFKC').toLowerCase());
 const MIN_SCAN_FILE_SIZE_BYTES = 1 * 1024 * 1024;
+const SCAN_IO_TIMEOUT_MS = toSafeInt(process.env.SCAN_IO_TIMEOUT_MS) || 1500;
+
+function withScanTimeout(promise, op, target) {
+  let timer = null;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      const err = new Error(`${op} timeout: ${target}`);
+      err.code = 'ETIMEDOUT';
+      reject(err);
+    }, SCAN_IO_TIMEOUT_MS);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
 
 function hasExcludedScanPathSegment(targetPath) {
   const parts = path.resolve(targetPath).split(path.sep).filter(Boolean);
@@ -234,9 +249,9 @@ async function walkFiles(dir) {
     const current = queue.pop();
     let entries = [];
     try {
-      entries = await fs.readdir(current, { withFileTypes: true });
+      entries = await withScanTimeout(fs.readdir(current, { withFileTypes: true }), 'readdir', current);
     } catch (err) {
-      if (err && ['EACCES', 'EPERM', 'ENOENT'].includes(err.code)) {
+      if (err && ['EACCES', 'EPERM', 'ENOENT', 'ETIMEDOUT'].includes(err.code)) {
         await logLine(`[WARN] skip unreadable dir during scan: ${current} (${err.code})`);
         continue;
       }
@@ -259,9 +274,9 @@ async function walkFiles(dir) {
         }
         let stat = null;
         try {
-          stat = await fs.stat(full);
+          stat = await withScanTimeout(fs.stat(full), 'stat', full);
         } catch (err) {
-          if (err && ['EACCES', 'EPERM', 'ENOENT'].includes(err.code)) {
+          if (err && ['EACCES', 'EPERM', 'ENOENT', 'ETIMEDOUT'].includes(err.code)) {
             await logLine(`[WARN] skip unreadable file during scan: ${full} (${err.code})`);
             continue;
           }
