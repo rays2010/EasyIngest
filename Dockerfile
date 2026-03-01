@@ -1,4 +1,4 @@
-FROM node:20-alpine
+FROM docker.1ms.run/library/node:20-alpine
 
 WORKDIR /app
 
