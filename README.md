@@ -79,11 +79,17 @@ PORT=3000
 docker compose up -d --build
 ```
 
-4. 更新代码后重建：
+4. 更新代码后重建（NAS 已安装 git 时）：
 
 ```bash
 git pull
 docker compose up -d --build
+```
+
+5. 若 NAS 未安装 git，建议在本机执行一键部署脚本（默认目标 `home:/volume3/docker/EasyIngest`）：
+
+```bash
+./deploy-nas.sh
 ```
 
 ## 规则
