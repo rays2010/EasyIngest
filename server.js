@@ -210,14 +210,16 @@ function detectEpisodeMeta(normalizedName) {
   return null;
 }
 
-const EXCLUDED_SCAN_DIR_KEYWORDS = ['云盘缓存文件'];
+const EXCLUDED_SCAN_DIR_KEYWORDS = ['云盘缓存文件', '.drive', '@eaDir', '#recycle', '$recycle.bin'];
+const NORMALIZED_EXCLUDED_SCAN_DIR_KEYWORDS = EXCLUDED_SCAN_DIR_KEYWORDS
+  .map((k) => String(k || '').normalize('NFKC').toLowerCase());
 const MIN_SCAN_FILE_SIZE_BYTES = 1 * 1024 * 1024;
 
 function hasExcludedScanPathSegment(targetPath) {
   const parts = path.resolve(targetPath).split(path.sep).filter(Boolean);
   return parts.some((part) => {
-    const p = String(part || '').trim();
-    return EXCLUDED_SCAN_DIR_KEYWORDS.some((keyword) => p.includes(keyword));
+    const p = String(part || '').trim().normalize('NFKC').toLowerCase();
+    return NORMALIZED_EXCLUDED_SCAN_DIR_KEYWORDS.some((keyword) => p.includes(keyword));
   });
 }
 
@@ -227,7 +229,16 @@ async function walkFiles(dir) {
 
   while (queue.length > 0) {
     const current = queue.pop();
-    const entries = await fs.readdir(current, { withFileTypes: true });
+    let entries = [];
+    try {
+      entries = await fs.readdir(current, { withFileTypes: true });
+    } catch (err) {
+      if (err && ['EACCES', 'EPERM', 'ENOENT'].includes(err.code)) {
+        await logLine(`[WARN] skip unreadable dir during scan: ${current} (${err.code})`);
+        continue;
+      }
+      throw err;
+    }
     for (const entry of entries) {
       const full = path.join(current, entry.name);
       if (entry.isDirectory()) {
@@ -239,7 +250,16 @@ async function walkFiles(dir) {
         if (hasExcludedScanPathSegment(full)) {
           continue;
         }
-        const stat = await fs.stat(full);
+        let stat = null;
+        try {
+          stat = await fs.stat(full);
+        } catch (err) {
+          if (err && ['EACCES', 'EPERM', 'ENOENT'].includes(err.code)) {
+            await logLine(`[WARN] skip unreadable file during scan: ${full} (${err.code})`);
+            continue;
+          }
+          throw err;
+        }
         if (stat.size < MIN_SCAN_FILE_SIZE_BYTES) {
           continue;
         }
