@@ -2,6 +2,12 @@
 
 本地网页工具：扫描视频文件 -> AI 建议命名/分类 -> 人工编辑确认 -> 执行重命名和移动。
 
+## 使用方式总览
+
+- 本地开发调试：`npm run dev`（自动热重启）
+- NAS 长期运行：`docker compose up -d --build`
+- 日常更新（推荐）：本机执行 `./deploy-nas.sh` 自动同步并重启
+
 ## 本地开发
 
 ```bash
@@ -38,12 +44,12 @@ PORT=3000
 其中 `INPUT_DIR` 和 `OUTPUT_DIR` 配置后，页面会自动回填，扫描时可不手动输入。
 `TITLE_LANGUAGE` 用于统一片名语言：`zh`（中文）或 `en`（英文）。
 
-## NAS Docker 部署
+## NAS 首次部署
 
-1. 在 NAS（示例路径 `/volume3/docker/easyingest`）准备目录：
+1. 在 NAS（当前推荐路径 `/volume3/docker/EasyIngest`）准备目录：
 
 ```bash
-mkdir -p /volume3/docker/easyingest/{input,output,tasks,logs}
+mkdir -p /volume3/docker/EasyIngest/{input,output,tasks,logs}
 ```
 
 2. 复制环境变量并按需修改：
@@ -62,8 +68,8 @@ OUTPUT_DIR=/data/output
 并设置 NAS 主机挂载目录：
 
 ```bash
-INPUT_HOST_DIR=/volume3/docker/easyingest/input
-OUTPUT_HOST_DIR=/volume3/docker/easyingest/output
+INPUT_HOST_DIR=/volume3/docker/EasyIngest/input
+OUTPUT_HOST_DIR=/volume3/docker/EasyIngest/output
 ```
 
 如需避免端口冲突，改宿主机端口即可（容器内端口保持 3000）：
@@ -79,18 +85,64 @@ PORT=3000
 docker compose up -d --build
 ```
 
-4. 更新代码后重建（NAS 已安装 git 时）：
+4. 访问：
 
 ```bash
-git pull
-docker compose up -d --build
+http://<NAS_IP>:3030
 ```
 
-5. 若 NAS 未安装 git，建议在本机执行一键部署脚本（默认目标 `home:/volume3/docker/EasyIngest`）：
+## 日常更新（推荐）
+
+如果 NAS 没有安装 `git`，直接在本机项目目录执行：
 
 ```bash
 ./deploy-nas.sh
 ```
+
+脚本默认行为：
+
+- 远程主机：`home`
+- 远程目录：`/volume3/docker/EasyIngest`
+- 宿主机端口：`3030`
+- 自动同步代码、修正 `.env` 必要项、重建并重启容器
+
+可选参数：
+
+```bash
+./deploy-nas.sh <ssh_host> <remote_dir>
+```
+
+示例：
+
+```bash
+HOST_PORT=3040 ./deploy-nas.sh home /volume3/docker/EasyIngest
+```
+
+## 日常运维命令
+
+在 NAS 上执行（`docker` 可能需要 `sudo`）：
+
+```bash
+cd /volume3/docker/EasyIngest
+/usr/local/bin/docker compose ps
+/usr/local/bin/docker compose logs -f easyingest
+/usr/local/bin/docker compose restart easyingest
+```
+
+## 常见问题
+
+1. 端口占用（`Bind for 0.0.0.0:3000 failed`）
+把 `.env` 的 `HOST_PORT` 改成空闲端口，例如 `3030`，然后重启：
+
+```bash
+/usr/local/bin/docker compose up -d --build
+```
+
+2. Docker 权限不足（`permission denied /var/run/docker.sock`）
+使用可访问 Docker 的账号，或通过 `sudo -n /usr/local/bin/docker ...` 执行。
+
+3. 镜像拉取超时
+项目已默认使用镜像源 `docker.1ms.run/library/node:20-alpine`。如网络仍异常，稍后重试构建。
 
 ## 规则
 
