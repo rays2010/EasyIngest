@@ -1012,11 +1012,6 @@ async function applyTask(task) {
     }
   }
 
-  if (!(await hasAnyVideoFiles(task.inputDir))) {
-    await removeAllFilesAndEmptyDirs(task.inputDir);
-    await logLine(`[INFO] cleaned non-video leftovers under ${task.inputDir}`);
-  }
-
   task.applyStatus = 'completed';
   task.currentApplyFile = '';
   task.applyError = '';
