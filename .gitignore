@@ -4,3 +4,5 @@ tasks/*.json
 tasks/*.result.json
 .DS_Store
 .env
+@eaDir/
+._*
