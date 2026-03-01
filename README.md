@@ -30,6 +30,7 @@ AI_MODEL=gpt-4.1-mini
 TITLE_LANGUAGE=zh
 INPUT_DIR=/path/to/input
 OUTPUT_DIR=/path/to/output
+HOST_PORT=3000
 PORT=3000
 ```
 
@@ -63,6 +64,13 @@ OUTPUT_DIR=/data/output
 ```bash
 INPUT_HOST_DIR=/volume3/docker/easyingest/input
 OUTPUT_HOST_DIR=/volume3/docker/easyingest/output
+```
+
+如需避免端口冲突，改宿主机端口即可（容器内端口保持 3000）：
+
+```bash
+HOST_PORT=3030
+PORT=3000
 ```
 
 3. 启动：
