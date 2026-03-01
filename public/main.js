@@ -142,11 +142,33 @@ function renderTask() {
   const total = state.task.entries.length;
   const selected = state.task.entries.filter((e) => e.selected).length;
   const scanStatus = state.task.scanStatus || 'completed';
+  const applyStatus = state.task.applyStatus || 'idle';
+
+  if (applyStatus === 'running') {
+    const done = state.task.applyDone || 0;
+    const all = state.task.applyTotal || 0;
+    const current = state.task.currentApplyFile || '-';
+    summaryEl.textContent = `任务ID: ${state.task.id} | 正在执行 ${done}/${all} | 当前：${current}`;
+    scanBtn.disabled = true;
+    recomputeBtn.disabled = true;
+    applyBtn.disabled = true;
+    return;
+  }
+  if (applyStatus === 'failed') {
+    const err = state.task.applyError || 'unknown error';
+    summaryEl.textContent = `任务ID: ${state.task.id} | 执行失败：${err}`;
+    scanBtn.disabled = false;
+    recomputeBtn.disabled = false;
+    applyBtn.disabled = false;
+    return;
+  }
+
   if (scanStatus === 'running') {
     const done = state.task.scanDone || 0;
     const all = state.task.scanTotal || 0;
     const current = state.task.currentFile || '-';
     summaryEl.textContent = `任务ID: ${state.task.id} | 正在识别 ${done}/${all} | 当前：${current} | 已展示 ${state.displayRows.length} 行`;
+    scanBtn.disabled = true;
     recomputeBtn.disabled = true;
     applyBtn.disabled = true;
     return;
@@ -154,11 +176,13 @@ function renderTask() {
   if (scanStatus === 'failed') {
     const err = state.task.scanError || 'unknown error';
     summaryEl.textContent = `任务ID: ${state.task.id} | 识别失败：${err}`;
+    scanBtn.disabled = false;
     recomputeBtn.disabled = true;
     applyBtn.disabled = true;
     return;
   }
 
+  scanBtn.disabled = false;
   summaryEl.textContent = `任务ID: ${state.task.id} | 视频共 ${total} 条，已勾选 ${selected} 条，展示 ${state.displayRows.length} 行`;
   recomputeBtn.disabled = total === 0;
   applyBtn.disabled = total === 0;
@@ -175,7 +199,11 @@ async function refreshTask(taskId) {
   const task = await requestJson(`/api/tasks/${taskId}`);
   state.task = task;
   renderTask();
-  if (task.scanStatus === 'completed' || task.scanStatus === 'failed') {
+  if (task.lastApplyResult && task.applyStatus === 'completed') {
+    resultEl.textContent = JSON.stringify(task.lastApplyResult, null, 2);
+  }
+  if ((task.scanStatus === 'completed' || task.scanStatus === 'failed')
+    && (task.applyStatus === 'idle' || task.applyStatus === 'completed' || task.applyStatus === 'failed')) {
     stopScanPolling();
     scanBtn.disabled = false;
   }
@@ -287,6 +315,7 @@ recomputeBtn.addEventListener('click', async () => {
 
 applyBtn.addEventListener('click', async () => {
   if (!state.task) return;
+  stopScanPolling();
   applyBtn.disabled = true;
   resultEl.textContent = '';
   try {
@@ -296,18 +325,18 @@ applyBtn.addEventListener('click', async () => {
       body: JSON.stringify({ entries: collectEntriesForUpdate() })
     });
 
-    const result = await requestJson(`/api/tasks/${state.task.id}/apply`, {
+    const resp = await requestJson(`/api/tasks/${state.task.id}/apply`, {
       method: 'POST'
     });
-    resultEl.textContent = JSON.stringify(result, null, 2);
-
-    const task = await requestJson(`/api/tasks/${state.task.id}`);
-    state.task = task;
-    renderTask();
+    await refreshTask(resp.taskId || state.task.id);
+    startScanPolling(resp.taskId || state.task.id);
   } catch (err) {
     alert(err.message);
-  } finally {
     applyBtn.disabled = false;
+  } finally {
+    if (state.task?.applyStatus !== 'running') {
+      applyBtn.disabled = false;
+    }
   }
 });
 

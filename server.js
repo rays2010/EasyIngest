@@ -610,7 +610,13 @@ async function createTask({ inputDir, outputDir, taskId = crypto.randomUUID(), o
     scanTotal: 0,
     scanDone: 0,
     currentFile: '',
-    scanError: ''
+    scanError: '',
+    applyStatus: 'idle',
+    applyTotal: 0,
+    applyDone: 0,
+    currentApplyFile: '',
+    applyError: '',
+    lastApplyResult: null
   };
 
   async function pushProgress() {
@@ -956,6 +962,13 @@ async function applyTask(task) {
     details: []
   };
 
+  task.applyStatus = 'running';
+  task.applyTotal = task.entries.filter((e) => e.selected).length;
+  task.applyDone = 0;
+  task.currentApplyFile = '';
+  task.applyError = '';
+  await saveTask(task);
+
   for (const entry of task.entries) {
     if (!entry.selected) {
       result.skipped += 1;
@@ -966,6 +979,8 @@ async function applyTask(task) {
     }
 
     try {
+      task.currentApplyFile = entry.sourceName;
+      await saveTask(task);
       const sourceParentDir = path.dirname(entry.sourcePath);
       const finalPath = await uniquePath(entry.target.fullPath);
       await ensureParentDir(finalPath);
@@ -984,12 +999,16 @@ async function applyTask(task) {
         to: finalPath,
         subtitlesMoved: movedSubtitles.length
       });
+      task.applyDone += 1;
+      await saveTask(task);
     } catch (err) {
       entry.status = 'failed';
       entry.reason = err.message;
       result.failed += 1;
       result.details.push({ entryId: entry.id, status: 'failed', reason: err.message });
       await logLine(`[ERROR] apply failed ${entry.sourcePath}: ${err.message}`);
+      task.applyDone += 1;
+      await saveTask(task);
     }
   }
 
@@ -998,6 +1017,10 @@ async function applyTask(task) {
     await logLine(`[INFO] cleaned non-video leftovers under ${task.inputDir}`);
   }
 
+  task.applyStatus = 'completed';
+  task.currentApplyFile = '';
+  task.applyError = '';
+  task.lastApplyResult = result;
   await saveTask(task);
   const resultFile = path.join(TASK_DIR, `${task.id}.result.json`);
   await fs.writeFile(resultFile, `${JSON.stringify(result, null, 2)}\n`, 'utf8');
@@ -1026,7 +1049,13 @@ app.post('/api/scan', async (req, res) => {
       scanTotal: 0,
       scanDone: 0,
       currentFile: '',
-      scanError: ''
+      scanError: '',
+      applyStatus: 'idle',
+      applyTotal: 0,
+      applyDone: 0,
+      currentApplyFile: '',
+      applyError: '',
+      lastApplyResult: null
     };
     await saveTask(initialTask);
 
@@ -1075,6 +1104,9 @@ app.post('/api/tasks/:id/recompute', async (req, res) => {
     if (task.scanStatus === 'running') {
       return res.status(409).json({ error: 'scan is still running' });
     }
+    if (task.applyStatus === 'running') {
+      return res.status(409).json({ error: 'apply is still running' });
+    }
     const updates = req.body?.entries || [];
 
     const byId = new Map(task.entries.map((e) => [e.id, e]));
@@ -1107,9 +1139,38 @@ app.post('/api/tasks/:id/apply', async (req, res) => {
     if (task.scanStatus === 'running') {
       return res.status(409).json({ error: 'scan is still running' });
     }
-    const result = await applyTask(task);
-    await logLine(`[INFO] task applied ${task.id} success=${result.success} failed=${result.failed}`);
-    return res.json(result);
+    if (task.applyStatus === 'running') {
+      return res.status(409).json({ error: 'apply is still running' });
+    }
+
+    task.applyStatus = 'running';
+    task.applyTotal = task.entries.filter((e) => e.selected).length;
+    task.applyDone = 0;
+    task.currentApplyFile = '';
+    task.applyError = '';
+    task.lastApplyResult = null;
+    await saveTask(task);
+
+    (async () => {
+      try {
+        const latest = await readTask(task.id);
+        const result = await applyTask(latest);
+        await logLine(`[INFO] task applied ${task.id} success=${result.success} failed=${result.failed}`);
+      } catch (err) {
+        try {
+          const failedTask = await readTask(task.id);
+          failedTask.applyStatus = 'failed';
+          failedTask.currentApplyFile = '';
+          failedTask.applyError = err.message;
+          await saveTask(failedTask);
+        } catch {
+          // ignore secondary errors while reporting failure
+        }
+        await logLine(`[ERROR] apply failed: ${err.message}`);
+      }
+    })();
+
+    return res.json({ taskId: task.id });
   } catch (err) {
     await logLine(`[ERROR] apply failed: ${err.message}`);
     return res.status(500).json({ error: err.message });
