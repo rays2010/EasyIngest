@@ -1,7 +1,8 @@
 const state = {
   task: null,
   displayRows: [],
-  scanPollTimer: null
+  scanPollTimer: null,
+  applyNotice: ''
 };
 const SERIES_TYPES = new Set(['tv', 'anime', 'show']);
 
@@ -12,7 +13,6 @@ const recomputeBtn = document.getElementById('recomputeBtn');
 const applyBtn = document.getElementById('applyBtn');
 const summaryEl = document.getElementById('summary');
 const tbody = document.querySelector('#resultTable tbody');
-const resultEl = document.getElementById('result');
 
 async function loadConfig() {
   try {
@@ -175,6 +175,14 @@ function renderTask() {
     return;
   }
 
+  if (applyStatus === 'completed') {
+    summaryEl.textContent = state.applyNotice || '执行完成';
+    scanBtn.disabled = false;
+    recomputeBtn.disabled = total === 0;
+    applyBtn.disabled = total === 0;
+    return;
+  }
+
   if (scanStatus === 'running') {
     const done = state.task.scanDone || 0;
     const all = state.task.scanTotal || 0;
@@ -209,11 +217,16 @@ function stopScanPolling() {
 
 async function refreshTask(taskId) {
   const task = await requestJson(`/api/tasks/${taskId}`);
+  if (task.applyStatus === 'completed' && task.lastApplyResult) {
+    const success = task.lastApplyResult.success || 0;
+    const failed = task.lastApplyResult.failed || 0;
+    task.entries = (task.entries || []).filter((e) => e.status !== 'success');
+    state.applyNotice = failed > 0
+      ? `执行完成：成功 ${success}，失败 ${failed}。`
+      : `执行成功：已处理 ${success} 个文件。`;
+  }
   state.task = task;
   renderTask();
-  if (task.lastApplyResult && task.applyStatus === 'completed') {
-    resultEl.textContent = JSON.stringify(task.lastApplyResult, null, 2);
-  }
   if ((task.scanStatus === 'completed' || task.scanStatus === 'failed')
     && (task.applyStatus === 'idle' || task.applyStatus === 'completed' || task.applyStatus === 'failed')) {
     stopScanPolling();
@@ -282,7 +295,7 @@ async function requestJson(url, options, timeoutMs = 600000) {
 
 scanBtn.addEventListener('click', async () => {
   stopScanPolling();
-  resultEl.textContent = '';
+  state.applyNotice = '';
   scanBtn.disabled = true;
   summaryEl.textContent = '正在扫描并识别，请稍候...';
   try {
@@ -329,7 +342,7 @@ applyBtn.addEventListener('click', async () => {
   if (!state.task) return;
   stopScanPolling();
   applyBtn.disabled = true;
-  resultEl.textContent = '';
+  state.applyNotice = '';
   try {
     await requestJson(`/api/tasks/${state.task.id}/recompute`, {
       method: 'POST',
