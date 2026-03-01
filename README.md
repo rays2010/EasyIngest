@@ -144,6 +144,9 @@ cd /volume3/docker/EasyIngest
 3. 镜像拉取超时
 项目已默认使用镜像源 `docker.1ms.run/library/node:20-alpine`。如网络仍异常，稍后重试构建。
 
+4. 中文路径显示乱码
+从当前版本开始，服务会自动兼容 `.env` 的 UTF-8/GB18030（GBK）编码。若仍异常，建议把 `.env` 改为 UTF-8 后重启容器。
+
 ## 规则
 
 - 电影（单文件）：`片名 (年份).ext`

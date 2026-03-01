@@ -1,9 +1,52 @@
-require('dotenv').config();
-
+const dotenv = require('dotenv');
 const express = require('express');
+const fsSync = require('fs');
 const fs = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
+
+function looksMojibake(text) {
+  if (typeof text !== 'string') {
+    return false;
+  }
+  return text.includes('�') || /[\u0400-\u04FF]/.test(text);
+}
+
+function loadEnvWithEncodingFallback() {
+  const envPath = path.join(process.cwd(), '.env');
+  let raw;
+
+  try {
+    raw = fsSync.readFileSync(envPath);
+  } catch {
+    dotenv.config();
+    return;
+  }
+
+  const utf8Parsed = dotenv.parse(raw.toString('utf8'));
+  let merged = { ...utf8Parsed };
+
+  try {
+    const gbParsed = dotenv.parse(new TextDecoder('gb18030').decode(raw));
+    for (const key of Object.keys(gbParsed)) {
+      const utf8Value = utf8Parsed[key];
+      const gbValue = gbParsed[key];
+      if (!utf8Value || (looksMojibake(utf8Value) && !looksMojibake(gbValue))) {
+        merged[key] = gbValue;
+      }
+    }
+  } catch {
+    // Keep UTF-8 parse when gb18030 decoding is unavailable.
+  }
+
+  for (const [key, value] of Object.entries(merged)) {
+    if (process.env[key] === undefined) {
+      process.env[key] = value;
+    }
+  }
+}
+
+loadEnvWithEncodingFallback();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
