@@ -210,8 +210,16 @@ function detectEpisodeMeta(normalizedName) {
   return null;
 }
 
-const EXCLUDED_SCAN_DIR_NAMES = new Set(['云盘缓存文件']);
+const EXCLUDED_SCAN_DIR_KEYWORDS = ['云盘缓存文件'];
 const MIN_SCAN_FILE_SIZE_BYTES = 1 * 1024 * 1024;
+
+function hasExcludedScanPathSegment(targetPath) {
+  const parts = path.resolve(targetPath).split(path.sep).filter(Boolean);
+  return parts.some((part) => {
+    const p = String(part || '').trim();
+    return EXCLUDED_SCAN_DIR_KEYWORDS.some((keyword) => p.includes(keyword));
+  });
+}
 
 async function walkFiles(dir) {
   const out = [];
@@ -223,11 +231,14 @@ async function walkFiles(dir) {
     for (const entry of entries) {
       const full = path.join(current, entry.name);
       if (entry.isDirectory()) {
-        if (EXCLUDED_SCAN_DIR_NAMES.has(entry.name)) {
+        if (hasExcludedScanPathSegment(full)) {
           continue;
         }
         queue.push(full);
       } else if (entry.isFile()) {
+        if (hasExcludedScanPathSegment(full)) {
+          continue;
+        }
         const stat = await fs.stat(full);
         if (stat.size < MIN_SCAN_FILE_SIZE_BYTES) {
           continue;
@@ -638,6 +649,9 @@ async function createTask({ inputDir, outputDir, taskId = crypto.randomUUID(), o
   const allFiles = await walkFiles(inputDir);
   const videos = [];
   for (const file of allFiles) {
+    if (hasExcludedScanPathSegment(file)) {
+      continue;
+    }
     const stat = await fs.stat(file);
     const ext = path.extname(file).toLowerCase();
     if (!VIDEO_EXTENSIONS.has(ext) || stat.size <= 0) {
