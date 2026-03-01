@@ -83,6 +83,7 @@ const TYPE_TO_DIR = {
 };
 const AI_REQUEST_TIMEOUT_MS = Number(process.env.AI_REQUEST_TIMEOUT_MS || 8000);
 const AI_CIRCUIT_BREAK_MS = Number(process.env.AI_CIRCUIT_BREAK_MS || 300000);
+const SCAN_CONCURRENCY = Number(process.env.SCAN_CONCURRENCY || 4);
 let aiCircuitOpenUntil = 0;
 
 app.use(express.json({ limit: '5mb' }));
@@ -115,6 +116,29 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = AI_REQUEST_TIMEOU
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function mapLimit(items, limit, worker) {
+  const arr = Array.isArray(items) ? items : [];
+  const out = new Array(arr.length);
+  const cap = Math.max(1, Number(limit) || 1);
+  let idx = 0;
+
+  async function run() {
+    while (idx < arr.length) {
+      const current = idx;
+      idx += 1;
+      out[current] = await worker(arr[current], current);
+    }
+  }
+
+  const runners = [];
+  const n = Math.min(cap, arr.length);
+  for (let i = 0; i < n; i += 1) {
+    runners.push(run());
+  }
+  await Promise.all(runners);
+  return out;
 }
 
 async function ensureDirs() {
@@ -558,9 +582,9 @@ async function createTask({ inputDir, outputDir }) {
     if (yearByTitleCache.has(k)) {
       return yearByTitleCache.get(k);
     }
-    const y = await inferYearFromTitleByAI(title, typeHint);
-    yearByTitleCache.set(k, y);
-    return y;
+    const p = inferYearFromTitleByAI(title, typeHint);
+    yearByTitleCache.set(k, p);
+    return p;
   }
 
   async function resolveChineseTitle(title, typeHint, yearHint) {
@@ -568,23 +592,22 @@ async function createTask({ inputDir, outputDir }) {
     if (zhTitleCache.has(k)) {
       return zhTitleCache.get(k);
     }
-    const zh = await inferChineseTitleByAI(title, typeHint, yearHint);
-    zhTitleCache.set(k, zh);
-    return zh;
+    const p = inferChineseTitleByAI(title, typeHint, yearHint);
+    zhTitleCache.set(k, p);
+    return p;
   }
 
-  for (const [key, groupItems] of seriesGroups.entries()) {
+  await mapLimit([...seriesGroups.entries()], SCAN_CONCURRENCY, async ([key, groupItems]) => {
     if (groupItems.length < 2) {
-      continue;
+      return;
     }
     const fallback = groupItems[0].seriesHintHeuristic;
     const folderHintName = groupItems[0].seriesHintName;
     const aiGroup = await parseSeriesGroupByAI(groupItems.map((g) => g.basename), folderHintName, fallback);
     seriesGroupMeta.set(key, aiGroup);
-  }
+  });
 
-  const entries = [];
-  for (const item of preItems) {
+  const entries = await mapLimit(preItems, SCAN_CONCURRENCY, async (item) => {
     const groupKey = buildSeriesGroupKey(item.seriesHintHeuristic);
     const groupMeta = seriesGroupMeta.get(groupKey);
     const aiSingle = groupMeta ? null : await parseByAI(item.basename);
@@ -624,7 +647,7 @@ async function createTask({ inputDir, outputDir }) {
       }
     }
 
-    entries.push({
+    return {
       id: crypto.randomUUID(),
       sourcePath: item.file,
       sourceName: item.basename,
@@ -643,8 +666,8 @@ async function createTask({ inputDir, outputDir }) {
       status: 'pending',
       reason: '',
       target: null
-    });
-  }
+    };
+  });
 
   const task = {
     id: crypto.randomUUID(),
