@@ -25,8 +25,14 @@ async function loadConfig() {
 }
 
 function rowHtml(entry) {
+  const typeLabel = {
+    movie: '电影',
+    tv: '电视剧',
+    anime: '动画',
+    show: '节目'
+  };
   const typeOptions = ['movie', 'tv', 'anime', 'show']
-    .map((t) => `<option value="${t}" ${entry.edited.type === t ? 'selected' : ''}>${t}</option>`)
+    .map((t) => `<option value="${t}" ${entry.edited.type === t ? 'selected' : ''}>${typeLabel[t] || t}</option>`)
     .join('');
 
   return `
