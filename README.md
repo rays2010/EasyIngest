@@ -148,6 +148,22 @@ cd /volume3/docker/EasyIngest
 4. 中文路径显示乱码
 从当前版本开始，服务会自动兼容 `.env` 的 UTF-8/GB18030（GBK）编码。若仍异常，建议把 `.env` 改为 UTF-8 后重启容器。
 
+5. NAS 访问 AI 接口不通（走 Clash 代理）
+在 `.env` 设置：
+
+```bash
+HTTP_PROXY=http://host.docker.internal:7890
+HTTPS_PROXY=http://host.docker.internal:7890
+ALL_PROXY=http://host.docker.internal:7890
+NO_PROXY=localhost,127.0.0.1,host.docker.internal
+```
+
+然后重启容器：
+
+```bash
+/usr/local/bin/docker compose up -d
+```
+
 ## 规则
 
 - 电影（单文件）：`片名 (年份).ext`

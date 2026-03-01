@@ -7,8 +7,15 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    environment:
+      - HTTP_PROXY=${HTTP_PROXY:-}
+      - HTTPS_PROXY=${HTTPS_PROXY:-}
+      - ALL_PROXY=${ALL_PROXY:-}
+      - NO_PROXY=${NO_PROXY:-localhost,127.0.0.1,host.docker.internal}
     ports:
       - "${HOST_PORT:-3000}:${PORT:-3000}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./tasks:/app/tasks
       - ./logs:/app/logs
