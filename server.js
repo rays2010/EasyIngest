@@ -160,6 +160,28 @@ function cleanName(name) {
   return name.replace(/[\\/:*?"<>|]/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
+function stripNoiseTokens(text) {
+  let t = String(text || '');
+
+  // Remove common release wrappers and web/source noise.
+  t = t.replace(/\[[^\]]*(?:www\.|https?:\/\/|\.com|\.net|\.org|\.cc|\.tv|最新网址|论坛|字幕组)[^\]]*\]/gi, ' ');
+  t = t.replace(/\([^\)]*(?:www\.|https?:\/\/|\.com|\.net|\.org|\.cc|\.tv)[^\)]*\)/gi, ' ');
+  t = t.replace(/https?:\/\/\S+/gi, ' ');
+  t = t.replace(/www\.[^\s]+/gi, ' ');
+  t = t.replace(/\b[A-Za-z0-9-]+\.(?:com|net|org|cc|tv|xyz|top|cn)\b/gi, ' ');
+
+  // Remove resolution/source/codec/audio tags.
+  t = t.replace(/\b(?:2160p|1080p|720p|480p|4k|8k)\b/gi, ' ');
+  t = t.replace(/\b(?:blu[\s-]?ray|bdrip|webrip|web[\s-]?dl|hdrip|dvdrip|remux)\b/gi, ' ');
+  t = t.replace(/\b(?:x264|x265|h264|h265|hevc|avc|10bit|8bit)\b/gi, ' ');
+  t = t.replace(/\b(?:aac(?:2\.0)?|ddp?\d(?:\.\d)?|atmos|dts(?:-hd)?)\b/gi, ' ');
+
+  // Remove frequent Chinese junk words.
+  t = t.replace(/(?:中文字幕|中字|双字|原创|原创字幕|高清|超清|蓝光|未删减|完整版|内封|官中|特效字幕)/g, ' ');
+
+  return cleanName(t.replace(/[._]/g, ' '));
+}
+
 function detectEpisodeMeta(normalizedName) {
   const sxe = normalizedName.match(/[Ss](\d{1,2})[Ee](\d{1,3})/);
   if (sxe) {
@@ -228,7 +250,8 @@ function parseByHeuristic(filename) {
     titleBase = '';
   }
   titleBase = titleBase.replace(/(?:19|20)\d{2}.*/, '');
-  const title = cleanName(titleBase) || (episodeMeta ? '' : cleanName(noExt));
+  const cleaned = stripNoiseTokens(titleBase);
+  const title = cleaned || (episodeMeta ? '' : stripNoiseTokens(noExt));
 
   return {
     title,
@@ -237,11 +260,11 @@ function parseByHeuristic(filename) {
     season: episodeMeta ? Number(episodeMeta.season) : null,
     episode: episodeMeta ? Number(episodeMeta.episode) : null,
     confidence: 0.4,
-    source: 'heuristic'
+    source: 'cleaner'
   };
 }
 
-async function parseByAI(filename) {
+async function parseByAI({ filename, cleanedTitleHint = '', folderHintName = '', episodeHint = null, yearHint = null }) {
   const apiKey = process.env.AI_API_KEY;
   const apiBase = process.env.AI_API_BASE || 'https://api.openai.com/v1';
   const model = process.env.AI_MODEL || 'gpt-4.1-mini';
@@ -254,7 +277,7 @@ async function parseByAI(filename) {
     TITLE_LANGUAGE === 'en'
       ? 'title 必须使用英文官方名（不要中文译名）。'
       : 'title 必须使用简体中文常用译名（不要英文名）。';
-  const prompt = `你是视频文件名识别器。根据文件名输出严格 JSON，不要输出任何额外文字。\n字段：title(string),year(number|null),type(movie|tv|anime|show),season(number|null),episode(number|null),confidence(0-1)。\n额外规则：${languageRule}\n文件名：${filename}`;
+  const prompt = `你是影视文件识别器。根据“清洗后的标题提示 + 原始文件名 + 目录提示”输出严格 JSON，不要输出任何额外文字。\n字段：title(string),year(number|null),type(movie|tv|anime|show),season(number|null),episode(number|null),confidence(0-1)。\n额外规则：${languageRule}\n要求：优先基于清洗后的标题提示识别真实作品；忽略网址、分辨率、编码、字幕、原创等噪声。\n清洗后的标题提示：${cleanedTitleHint || ''}\n目录提示：${folderHintName || ''}\n原始文件名：${filename}\n集数提示：${episodeHint ? `S${episodeHint.season}E${episodeHint.episode}` : ''}\n年份提示：${yearHint || ''}`;
 
   try {
     const resp = await fetchWithTimeout(`${apiBase}/chat/completions`, {
@@ -286,7 +309,7 @@ async function parseByAI(filename) {
       : 'movie';
 
     return {
-      title: cleanName(parsed.title || filename.replace(/\.[^.]+$/, '')),
+      title: cleanName(parsed.title || cleanedTitleHint || filename.replace(/\.[^.]+$/, '')),
       year: toSafeInt(parsed.year),
       type,
       season: toSafeInt(parsed.season),
@@ -322,7 +345,7 @@ function detectSeriesHintName(filePath, inputDir) {
   return parts[0] || path.basename(parentAbs);
 }
 
-async function parseSeriesGroupByAI(fileNames, folderHintName, fallback) {
+async function parseSeriesGroupByAI(fileNames, cleanedHints, folderHintName, cleanedFolderHint, fallback) {
   const apiKey = process.env.AI_API_KEY;
   const apiBase = process.env.AI_API_BASE || 'https://api.openai.com/v1';
   const model = process.env.AI_MODEL || 'gpt-4.1-mini';
@@ -342,7 +365,7 @@ async function parseSeriesGroupByAI(fileNames, folderHintName, fallback) {
       ? 'title 必须使用英文官方名（不要中文译名）。'
       : 'title 必须使用简体中文常用译名（不要英文名）。';
 
-  const prompt = `你是剧集文件名识别器。下面这些文件来自同一部剧集，请输出统一信息。\n输出严格 JSON，不要输出任何额外文字。\n字段：title(string),year(number|null),type(tv|anime|show),confidence(0-1)。\n额外规则：${languageRule}\n识别优先级：优先依据“剧集目录名”，文件名仅作辅助。\n剧集目录名：${folderHintName}\n文件名列表：${fileNames.join(' | ')}`;
+  const prompt = `你是剧集文件名识别器。下面这些文件来自同一部剧集，请输出统一信息。\n输出严格 JSON，不要输出任何额外文字。\n字段：title(string),year(number|null),type(tv|anime|show),confidence(0-1)。\n额外规则：${languageRule}\n识别优先级：优先依据“清洗后的目录提示”，文件名仅作辅助。\n清洗后的目录提示：${cleanedFolderHint || ''}\n原始剧集目录名：${folderHintName}\n清洗后的文件提示列表：${cleanedHints.join(' | ')}\n原始文件名列表：${fileNames.join(' | ')}`;
 
   try {
     const resp = await fetchWithTimeout(`${apiBase}/chat/completions`, {
@@ -637,20 +660,36 @@ async function createTask({ inputDir, outputDir }) {
     }
     const fallback = groupItems[0].seriesHintHeuristic;
     const folderHintName = groupItems[0].seriesHintName;
-    const aiGroup = await parseSeriesGroupByAI(groupItems.map((g) => g.basename), folderHintName, fallback);
+    const cleanedHints = groupItems.map((g) => g.heuristic.title || '').filter(Boolean);
+    const cleanedFolderHint = fallback.title || '';
+    const aiGroup = await parseSeriesGroupByAI(
+      groupItems.map((g) => g.basename),
+      cleanedHints,
+      folderHintName,
+      cleanedFolderHint,
+      fallback
+    );
     seriesGroupMeta.set(key, aiGroup);
   });
 
   const entries = await mapLimit(preItems, SCAN_CONCURRENCY, async (item) => {
     const groupKey = buildSeriesGroupKey(item.seriesHintHeuristic);
     const groupMeta = seriesGroupMeta.get(groupKey);
-    const aiSingle = groupMeta ? null : await parseByAI(item.basename);
-    const localNameSource = groupMeta ? item.seriesHintHeuristic : item.heuristic;
-    const keepLocalName = isCompleteChineseRecognition(localNameSource);
+    const aiSingle = groupMeta
+      ? null
+      : await parseByAI({
+          filename: item.basename,
+          cleanedTitleHint: item.heuristic.title,
+          folderHintName: item.seriesHintName,
+          episodeHint: item.heuristic.season && item.heuristic.episode
+            ? { season: item.heuristic.season, episode: item.heuristic.episode }
+            : null,
+          yearHint: item.heuristic.year
+        });
     const ai = groupMeta
       ? {
-          title: keepLocalName ? localNameSource.title : groupMeta.title,
-          year: keepLocalName ? localNameSource.year : groupMeta.year,
+          title: groupMeta.title || item.seriesHintHeuristic.title || item.heuristic.title || item.originalNameNoExt,
+          year: groupMeta.year || item.heuristic.year || null,
           type: groupMeta.type,
           season: item.heuristic.season || groupMeta.season || null,
           episode: item.heuristic.episode || groupMeta.episode || null,
@@ -658,8 +697,8 @@ async function createTask({ inputDir, outputDir }) {
           source: groupMeta.source
         }
       : {
-          title: keepLocalName ? localNameSource.title : aiSingle.title,
-          year: keepLocalName ? localNameSource.year : aiSingle.year,
+          title: aiSingle.title || item.heuristic.title || item.originalNameNoExt,
+          year: aiSingle.year || item.heuristic.year || null,
           type: aiSingle.type,
           season: item.heuristic.season || aiSingle.season || null,
           episode: item.heuristic.episode || aiSingle.episode || null,
@@ -667,8 +706,8 @@ async function createTask({ inputDir, outputDir }) {
           source: aiSingle.source
         };
 
-    if (hasTitleWithoutYear(localNameSource)) {
-      const inferredYear = await resolveYearByTitle(localNameSource.title, ai.type);
+    if (hasTitleWithoutYear(ai)) {
+      const inferredYear = await resolveYearByTitle(ai.title, ai.type);
       if (inferredYear) {
         ai.year = inferredYear;
       }

@@ -47,7 +47,7 @@ function sourceToLabel(source) {
   if (source === 'ai' || source === 'ai-group') {
     return 'AI';
   }
-  if (source === 'heuristic' || source === 'heuristic-group') {
+  if (source === 'heuristic' || source === 'heuristic-group' || source === 'cleaner' || source === 'cleaner-group') {
     return '本地算法';
   }
   return source || '-';
