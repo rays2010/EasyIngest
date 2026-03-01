@@ -43,6 +43,7 @@ PORT=3000
 也可以继续用命令行 `export` 环境变量覆盖 `.env` 中的值。
 其中 `INPUT_DIR` 和 `OUTPUT_DIR` 配置后，页面会自动回填，扫描时可不手动输入。
 `TITLE_LANGUAGE` 用于统一片名语言：`zh`（中文）或 `en`（英文）。
+在 Docker 部署下，页面默认会优先显示 `INPUT_HOST_DIR/OUTPUT_HOST_DIR`。
 
 ## NAS 首次部署
 

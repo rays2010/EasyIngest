@@ -12,5 +12,7 @@ services:
     volumes:
       - ./tasks:/app/tasks
       - ./logs:/app/logs
-      - ${INPUT_HOST_DIR:-/volume3/docker/easyingest/input}:/data/input
-      - ${OUTPUT_HOST_DIR:-/volume3/docker/easyingest/output}:/data/output
+      - ${INPUT_HOST_DIR:-/volume3/docker/EasyIngest/input}:/data/input
+      - ${OUTPUT_HOST_DIR:-/volume3/docker/EasyIngest/output}:/data/output
+      - ${INPUT_HOST_DIR:-/volume3/docker/EasyIngest/input}:${INPUT_HOST_DIR:-/volume3/docker/EasyIngest/input}
+      - ${OUTPUT_HOST_DIR:-/volume3/docker/EasyIngest/output}:${OUTPUT_HOST_DIR:-/volume3/docker/EasyIngest/output}
