@@ -4,6 +4,7 @@ const fsSync = require('fs');
 const fs = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
+const { ProxyAgent, setGlobalDispatcher } = require('undici');
 
 function looksMojibake(text) {
   if (typeof text !== 'string') {
@@ -47,6 +48,20 @@ function loadEnvWithEncodingFallback() {
 }
 
 loadEnvWithEncodingFallback();
+
+const upstreamProxy =
+  process.env.HTTPS_PROXY ||
+  process.env.HTTP_PROXY ||
+  process.env.ALL_PROXY ||
+  '';
+if (upstreamProxy) {
+  try {
+    setGlobalDispatcher(new ProxyAgent(upstreamProxy));
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error(`[WARN] invalid proxy url, fallback to direct fetch: ${err.message}`);
+  }
+}
 
 const app = express();
 const PORT = process.env.PORT || 3000;

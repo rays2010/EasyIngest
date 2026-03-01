@@ -164,6 +164,8 @@ NO_PROXY=localhost,127.0.0.1,host.docker.internal
 /usr/local/bin/docker compose up -d
 ```
 
+服务端会自动读取上述代理变量，并让 AI 请求通过代理发出。
+
 ## 规则
 
 - 电影（单文件）：`片名 (年份).ext`
