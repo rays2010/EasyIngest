@@ -253,6 +253,10 @@ async function walkFiles(dir) {
         if (hasExcludedScanPathSegment(full)) {
           continue;
         }
+        const ext = path.extname(entry.name).toLowerCase();
+        if (!VIDEO_EXTENSIONS.has(ext)) {
+          continue;
+        }
         let stat = null;
         try {
           stat = await fs.stat(full);
@@ -266,7 +270,7 @@ async function walkFiles(dir) {
         if (stat.size < MIN_SCAN_FILE_SIZE_BYTES) {
           continue;
         }
-        out.push(full);
+        out.push({ file: full, size: stat.size });
       }
     }
   }
@@ -671,16 +675,15 @@ async function createTask({ inputDir, outputDir, taskId = crypto.randomUUID(), o
 
   const allFiles = await walkFiles(inputDir);
   const videos = [];
-  for (const file of allFiles) {
-    if (hasExcludedScanPathSegment(file)) {
+  for (const item of allFiles) {
+    if (hasExcludedScanPathSegment(item.file)) {
       continue;
     }
-    const stat = await fs.stat(file);
-    const ext = path.extname(file).toLowerCase();
-    if (!VIDEO_EXTENSIONS.has(ext) || stat.size <= 0) {
+    const ext = path.extname(item.file).toLowerCase();
+    if (!VIDEO_EXTENSIONS.has(ext)) {
       continue;
     }
-    videos.push({ file, ext, size: stat.size });
+    videos.push({ file: item.file, ext, size: item.size });
   }
 
   const preItems = videos.map((item) => {
