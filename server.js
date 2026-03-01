@@ -219,6 +219,9 @@ function hasExcludedScanPathSegment(targetPath) {
   const parts = path.resolve(targetPath).split(path.sep).filter(Boolean);
   return parts.some((part) => {
     const p = String(part || '').trim().normalize('NFKC').toLowerCase();
+    if (p.startsWith('.') && p.length > 1) {
+      return true;
+    }
     return NORMALIZED_EXCLUDED_SCAN_DIR_KEYWORDS.some((keyword) => p.includes(keyword));
   });
 }
