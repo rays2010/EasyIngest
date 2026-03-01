@@ -1,6 +1,7 @@
 const state = {
   task: null,
-  displayRows: []
+  displayRows: [],
+  scanPollTimer: null
 };
 const SERIES_TYPES = new Set(['tv', 'anime', 'show']);
 
@@ -147,10 +148,55 @@ function renderTask() {
   tbody.innerHTML = state.displayRows.map(rowHtml).join('');
   const total = state.task.entries.length;
   const selected = state.task.entries.filter((e) => e.selected).length;
-  summaryEl.textContent = `任务ID: ${state.task.id} | 视频共 ${total} 条，已勾选 ${selected} 条，展示 ${state.displayRows.length} 行`;
+  const scanStatus = state.task.scanStatus || 'completed';
+  if (scanStatus === 'running') {
+    const done = state.task.scanDone || 0;
+    const all = state.task.scanTotal || 0;
+    const current = state.task.currentFile || '-';
+    summaryEl.textContent = `任务ID: ${state.task.id} | 正在识别 ${done}/${all} | 当前：${current} | 已展示 ${state.displayRows.length} 行`;
+    recomputeBtn.disabled = true;
+    applyBtn.disabled = true;
+    return;
+  }
+  if (scanStatus === 'failed') {
+    const err = state.task.scanError || 'unknown error';
+    summaryEl.textContent = `任务ID: ${state.task.id} | 识别失败：${err}`;
+    recomputeBtn.disabled = true;
+    applyBtn.disabled = true;
+    return;
+  }
 
-  recomputeBtn.disabled = false;
-  applyBtn.disabled = false;
+  summaryEl.textContent = `任务ID: ${state.task.id} | 视频共 ${total} 条，已勾选 ${selected} 条，展示 ${state.displayRows.length} 行`;
+  recomputeBtn.disabled = total === 0;
+  applyBtn.disabled = total === 0;
+}
+
+function stopScanPolling() {
+  if (state.scanPollTimer) {
+    clearInterval(state.scanPollTimer);
+    state.scanPollTimer = null;
+  }
+}
+
+async function refreshTask(taskId) {
+  const task = await requestJson(`/api/tasks/${taskId}`);
+  state.task = task;
+  renderTask();
+  if (task.scanStatus === 'completed' || task.scanStatus === 'failed') {
+    stopScanPolling();
+    scanBtn.disabled = false;
+  }
+}
+
+function startScanPolling(taskId) {
+  stopScanPolling();
+  state.scanPollTimer = setInterval(async () => {
+    try {
+      await refreshTask(taskId);
+    } catch (_) {
+      // keep polling
+    }
+  }, 1000);
 }
 
 function collectEntriesForUpdate() {
@@ -202,11 +248,12 @@ async function requestJson(url, options, timeoutMs = 600000) {
 }
 
 scanBtn.addEventListener('click', async () => {
+  stopScanPolling();
   resultEl.textContent = '';
   scanBtn.disabled = true;
   summaryEl.textContent = '正在扫描并识别，请稍候...';
   try {
-    const task = await requestJson('/api/scan', {
+    const resp = await requestJson('/api/scan', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -214,13 +261,16 @@ scanBtn.addEventListener('click', async () => {
         outputDir: outputDirEl.value.trim()
       })
     }, 600000);
-    state.task = task;
-    renderTask();
+    await refreshTask(resp.taskId);
+    startScanPolling(resp.taskId);
   } catch (err) {
     summaryEl.textContent = '';
     alert(err.message);
-  } finally {
     scanBtn.disabled = false;
+  } finally {
+    if (state.task?.scanStatus !== 'running') {
+      scanBtn.disabled = false;
+    }
   }
 });
 

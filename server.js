@@ -598,10 +598,29 @@ async function saveTask(task) {
   await fs.writeFile(file, `${JSON.stringify(task, null, 2)}\n`, 'utf8');
 }
 
-async function createTask({ inputDir, outputDir }) {
+async function createTask({ inputDir, outputDir, taskId = crypto.randomUUID(), onProgress = null }) {
+  const task = {
+    id: taskId,
+    inputDir,
+    outputDir,
+    createdAt: nowISO(),
+    updatedAt: nowISO(),
+    entries: [],
+    scanStatus: 'running',
+    scanTotal: 0,
+    scanDone: 0,
+    currentFile: '',
+    scanError: ''
+  };
+
+  async function pushProgress() {
+    if (onProgress) {
+      await onProgress(task);
+    }
+  }
+
   const allFiles = await walkFiles(inputDir);
   const videos = [];
-
   for (const file of allFiles) {
     const stat = await fs.stat(file);
     const ext = path.extname(file).toLowerCase();
@@ -618,6 +637,8 @@ async function createTask({ inputDir, outputDir }) {
     const seriesHintHeuristic = parseByHeuristic(seriesHintName);
     return { ...item, basename, heuristic, seriesHintName, seriesHintHeuristic };
   });
+  task.scanTotal = preItems.length;
+  await pushProgress();
 
   const seriesGroups = new Map();
   for (const item of preItems) {
@@ -655,10 +676,12 @@ async function createTask({ inputDir, outputDir }) {
     return p;
   }
 
-  await mapLimit([...seriesGroups.entries()], SCAN_CONCURRENCY, async ([key, groupItems]) => {
+  for (const [key, groupItems] of [...seriesGroups.entries()]) {
     if (groupItems.length < 2) {
-      return;
+      continue;
     }
+    task.currentFile = `分组识别：${groupItems[0].seriesHintName || groupItems[0].basename}`;
+    await pushProgress();
     const fallback = groupItems[0].seriesHintHeuristic;
     const folderHintName = groupItems[0].seriesHintName;
     const cleanedHints = groupItems.map((g) => g.heuristic.title || '').filter(Boolean);
@@ -671,9 +694,12 @@ async function createTask({ inputDir, outputDir }) {
       fallback
     );
     seriesGroupMeta.set(key, aiGroup);
-  });
+  }
 
-  const entries = await mapLimit(preItems, SCAN_CONCURRENCY, async (item) => {
+  for (const item of preItems) {
+    task.currentFile = item.basename;
+    await pushProgress();
+
     const groupKey = buildSeriesGroupKey(item.seriesHintHeuristic);
     const groupMeta = seriesGroupMeta.get(groupKey);
     const aiSingle = groupMeta
@@ -721,7 +747,7 @@ async function createTask({ inputDir, outputDir }) {
       }
     }
 
-    return {
+    task.entries.push({
       id: crypto.randomUUID(),
       sourcePath: item.file,
       sourceName: item.basename,
@@ -740,20 +766,16 @@ async function createTask({ inputDir, outputDir }) {
       status: 'pending',
       reason: '',
       target: null
-    };
-  });
+    });
+    task.scanDone += 1;
+    recomputeTargets(task);
+    await pushProgress();
+  }
 
-  const task = {
-    id: crypto.randomUUID(),
-    inputDir,
-    outputDir,
-    createdAt: nowISO(),
-    updatedAt: nowISO(),
-    entries
-  };
-
+  task.scanStatus = 'completed';
+  task.currentFile = '';
   recomputeTargets(task);
-  await saveTask(task);
+  await pushProgress();
   return task;
 }
 
@@ -978,9 +1000,46 @@ app.post('/api/scan', async (req, res) => {
     }
 
     await ensureDirs();
-    const task = await createTask({ inputDir, outputDir });
-    await logLine(`[INFO] task created ${task.id} entries=${task.entries.length}`);
-    return res.json(task);
+    const taskId = crypto.randomUUID();
+    const initialTask = {
+      id: taskId,
+      inputDir,
+      outputDir,
+      createdAt: nowISO(),
+      updatedAt: nowISO(),
+      entries: [],
+      scanStatus: 'running',
+      scanTotal: 0,
+      scanDone: 0,
+      currentFile: '',
+      scanError: ''
+    };
+    await saveTask(initialTask);
+
+    (async () => {
+      try {
+        const task = await createTask({
+          inputDir,
+          outputDir,
+          taskId,
+          onProgress: async (t) => saveTask(t)
+        });
+        await logLine(`[INFO] task created ${task.id} entries=${task.entries.length}`);
+      } catch (err) {
+        try {
+          const failedTask = await readTask(taskId);
+          failedTask.scanStatus = 'failed';
+          failedTask.currentFile = '';
+          failedTask.scanError = err.message;
+          await saveTask(failedTask);
+        } catch {
+          // ignore secondary errors while reporting failure
+        }
+        await logLine(`[ERROR] async /api/scan failed: ${err.message}`);
+      }
+    })();
+
+    return res.json({ taskId });
   } catch (err) {
     await logLine(`[ERROR] /api/scan failed: ${err.message}`);
     return res.status(500).json({ error: err.message });
@@ -999,6 +1058,9 @@ app.get('/api/tasks/:id', async (req, res) => {
 app.post('/api/tasks/:id/recompute', async (req, res) => {
   try {
     const task = await readTask(req.params.id);
+    if (task.scanStatus === 'running') {
+      return res.status(409).json({ error: 'scan is still running' });
+    }
     const updates = req.body?.entries || [];
 
     const byId = new Map(task.entries.map((e) => [e.id, e]));
@@ -1028,6 +1090,9 @@ app.post('/api/tasks/:id/recompute', async (req, res) => {
 app.post('/api/tasks/:id/apply', async (req, res) => {
   try {
     const task = await readTask(req.params.id);
+    if (task.scanStatus === 'running') {
+      return res.status(409).json({ error: 'scan is still running' });
+    }
     const result = await applyTask(task);
     await logLine(`[INFO] task applied ${task.id} success=${result.success} failed=${result.failed}`);
     return res.json(result);
