@@ -161,7 +161,7 @@ NO_PROXY=localhost,127.0.0.1,host.docker.internal
 然后重启容器：
 
 ```bash
-/usr/local/bin/docker compose up -d
+/usr/local/bin/docker compose up -d --build
 ```
 
 服务端会自动读取上述代理变量，并让 AI 请求通过代理发出。
