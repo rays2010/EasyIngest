@@ -180,8 +180,20 @@ function collectEntriesForUpdate() {
   return updates;
 }
 
-async function requestJson(url, options) {
-  const resp = await fetch(url, options);
+async function requestJson(url, options, timeoutMs = 600000) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  let resp;
+  try {
+    resp = await fetch(url, { ...(options || {}), signal: ctrl.signal });
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      throw new Error('请求超时，请缩小扫描目录范围后重试');
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
   const data = await resp.json();
   if (!resp.ok) {
     throw new Error(data.error || 'request failed');
@@ -192,6 +204,7 @@ async function requestJson(url, options) {
 scanBtn.addEventListener('click', async () => {
   resultEl.textContent = '';
   scanBtn.disabled = true;
+  summaryEl.textContent = '正在扫描并识别，请稍候...';
   try {
     const task = await requestJson('/api/scan', {
       method: 'POST',
@@ -200,10 +213,11 @@ scanBtn.addEventListener('click', async () => {
         inputDir: inputDirEl.value.trim(),
         outputDir: outputDirEl.value.trim()
       })
-    });
+    }, 600000);
     state.task = task;
     renderTask();
   } catch (err) {
+    summaryEl.textContent = '';
     alert(err.message);
   } finally {
     scanBtn.disabled = false;

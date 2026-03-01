@@ -66,6 +66,9 @@ const TYPE_TO_DIR = {
   anime: '动画',
   show: '节目'
 };
+const AI_REQUEST_TIMEOUT_MS = Number(process.env.AI_REQUEST_TIMEOUT_MS || 8000);
+const AI_CIRCUIT_BREAK_MS = Number(process.env.AI_CIRCUIT_BREAK_MS || 300000);
+let aiCircuitOpenUntil = 0;
 
 app.use(express.json({ limit: '5mb' }));
 app.use(express.static(path.join(WORK_DIR, 'public')));
@@ -79,6 +82,24 @@ app.get('/api/config', (req, res) => {
 
 function nowISO() {
   return new Date().toISOString();
+}
+
+function isAICircuitOpen() {
+  return Date.now() < aiCircuitOpenUntil;
+}
+
+function openAICircuit() {
+  aiCircuitOpenUntil = Date.now() + AI_CIRCUIT_BREAK_MS;
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = AI_REQUEST_TIMEOUT_MS) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(new Error('AI request timeout')), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: ctrl.signal });
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function ensureDirs() {
@@ -152,7 +173,7 @@ async function parseByAI(filename) {
   const apiBase = process.env.AI_API_BASE || 'https://api.openai.com/v1';
   const model = process.env.AI_MODEL || 'gpt-4.1-mini';
 
-  if (!apiKey) {
+  if (!apiKey || isAICircuitOpen()) {
     return parseByHeuristic(filename);
   }
 
@@ -163,7 +184,7 @@ async function parseByAI(filename) {
   const prompt = `你是视频文件名识别器。根据文件名输出严格 JSON，不要输出任何额外文字。\n字段：title(string),year(number|null),type(movie|tv|anime|show),season(number|null),episode(number|null),confidence(0-1)。\n额外规则：${languageRule}\n文件名：${filename}`;
 
   try {
-    const resp = await fetch(`${apiBase}/chat/completions`, {
+    const resp = await fetchWithTimeout(`${apiBase}/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -201,6 +222,7 @@ async function parseByAI(filename) {
       source: 'ai'
     };
   } catch (err) {
+    openAICircuit();
     await logLine(`[WARN] AI fallback for ${filename}: ${err.message}`);
     return parseByHeuristic(filename);
   }
@@ -232,7 +254,7 @@ async function parseSeriesGroupByAI(fileNames, folderHintName, fallback) {
   const apiBase = process.env.AI_API_BASE || 'https://api.openai.com/v1';
   const model = process.env.AI_MODEL || 'gpt-4.1-mini';
 
-  if (!apiKey) {
+  if (!apiKey || isAICircuitOpen()) {
     return {
       title: fallback.title,
       year: fallback.year,
@@ -250,7 +272,7 @@ async function parseSeriesGroupByAI(fileNames, folderHintName, fallback) {
   const prompt = `你是剧集文件名识别器。下面这些文件来自同一部剧集，请输出统一信息。\n输出严格 JSON，不要输出任何额外文字。\n字段：title(string),year(number|null),type(tv|anime|show),confidence(0-1)。\n额外规则：${languageRule}\n识别优先级：优先依据“剧集目录名”，文件名仅作辅助。\n剧集目录名：${folderHintName}\n文件名列表：${fileNames.join(' | ')}`;
 
   try {
-    const resp = await fetch(`${apiBase}/chat/completions`, {
+    const resp = await fetchWithTimeout(`${apiBase}/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -283,6 +305,7 @@ async function parseSeriesGroupByAI(fileNames, folderHintName, fallback) {
       source: 'ai-group'
     };
   } catch (err) {
+    openAICircuit();
     await logLine(`[WARN] AI group fallback for series: ${err.message}`);
     return {
       title: fallback.title,
@@ -318,7 +341,7 @@ async function inferYearFromTitleByAI(title, typeHint = 'movie') {
   const model = process.env.AI_MODEL || 'gpt-4.1-mini';
   const cleanTitle = cleanName(title || '');
 
-  if (!apiKey || !cleanTitle) {
+  if (!apiKey || !cleanTitle || isAICircuitOpen()) {
     return null;
   }
 
@@ -326,7 +349,7 @@ async function inferYearFromTitleByAI(title, typeHint = 'movie') {
   const prompt = `你是影视年份查询器。根据给定标题推断最可能的“影视作品”首映年份，返回严格 JSON，不要输出额外文字。\n字段：year(number|null)。\n限定：只考虑电影/电视剧/动画/综艺/纪录片等影视作品；不要参考小说、漫画、游戏、音乐专辑等同名内容。\n若存在重名，优先选择最广为人知且与给定类型最匹配的影视条目。\n标题：${cleanTitle}\n类型：${safeTypeHint}`;
 
   try {
-    const resp = await fetch(`${apiBase}/chat/completions`, {
+    const resp = await fetchWithTimeout(`${apiBase}/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -351,6 +374,7 @@ async function inferYearFromTitleByAI(title, typeHint = 'movie') {
     const parsed = JSON.parse(text);
     return toSafeInt(parsed.year);
   } catch (err) {
+    openAICircuit();
     await logLine(`[WARN] infer year fallback for ${cleanTitle}: ${err.message}`);
     return null;
   }
