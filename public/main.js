@@ -42,22 +42,11 @@ function rowHtml(entry) {
       <td><input data-key="title" value="${entry.edited.title || ''}" /></td>
       <td><input data-key="year" value="${entry.edited.year || ''}" /></td>
       <td><select data-key="type">${typeOptions}</select></td>
-      <td>${entry.sourceLabel || '-'}</td>
       <td>${entry.episodeSummary || '-'}</td>
       <td class="path">${entry.target?.fullPath || ''}</td>
       <td>${entry.status || 'pending'} ${entry.reason ? `(${entry.reason})` : ''}</td>
     </tr>
   `;
-}
-
-function sourceToLabel(source) {
-  if (source === 'ai' || source === 'ai-group') {
-    return 'AI';
-  }
-  if (source === 'heuristic' || source === 'heuristic-group' || source === 'cleaner' || source === 'cleaner-group') {
-    return '本地算法';
-  }
-  return source || '-';
 }
 
 function buildSeriesKey(entry) {
@@ -112,7 +101,6 @@ function buildDisplayRows(task) {
       rows.push({
         ...e,
         kind: 'single',
-        sourceLabel: sourceToLabel(e.ai?.source),
         episodeSummary: e.edited.season && e.edited.episode ? `S${String(e.edited.season).padStart(2, '0')}E${String(e.edited.episode).padStart(2, '0')}` : '-'
       });
       continue;
@@ -134,7 +122,6 @@ function buildDisplayRows(task) {
       target: first.target,
       status: aggregateStatus(groupEntries),
       reason: '',
-      sourceLabel: sourceToLabel(first.ai?.source),
       episodeSummary: summarizeEpisodes(groupEntries)
     });
   }
