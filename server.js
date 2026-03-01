@@ -327,6 +327,13 @@ function hasChinese(text) {
   return /[\u4e00-\u9fff]/.test(text || '');
 }
 
+function looksEnglishTitle(text) {
+  if (!text || hasChinese(text)) {
+    return false;
+  }
+  return /[A-Za-z]/.test(text);
+}
+
 function isCompleteChineseRecognition(meta) {
   return Boolean(meta && hasChinese(meta.title) && toSafeInt(meta.year));
 }
@@ -376,6 +383,56 @@ async function inferYearFromTitleByAI(title, typeHint = 'movie') {
   } catch (err) {
     openAICircuit();
     await logLine(`[WARN] infer year fallback for ${cleanTitle}: ${err.message}`);
+    return null;
+  }
+}
+
+async function inferChineseTitleByAI(title, typeHint = 'movie', yearHint = null) {
+  const apiKey = process.env.AI_API_KEY;
+  const apiBase = process.env.AI_API_BASE || 'https://api.openai.com/v1';
+  const model = process.env.AI_MODEL || 'gpt-4.1-mini';
+  const cleanTitle = cleanName(title || '');
+  const safeTypeHint = ['movie', 'tv', 'anime', 'show'].includes(typeHint) ? typeHint : 'movie';
+  const safeYearHint = toSafeInt(yearHint);
+
+  if (!apiKey || !cleanTitle || hasChinese(cleanTitle) || isAICircuitOpen()) {
+    return null;
+  }
+
+  const prompt = `你是影视标题标准化助手。请根据给定英文标题，返回该影视作品最常用、最正式的简体中文名称。\n输出严格 JSON，不要输出额外文字。\n字段：title(string|null)。\n约束：\n1) 仅返回简体中文片名/剧名。\n2) 若无法确定，返回 null。\n3) 不要添加年份、季号、分辨率、地区等附加信息。\n标题：${cleanTitle}\n类型：${safeTypeHint}\n年份（可为空）：${safeYearHint || ''}`;
+
+  try {
+    const resp = await fetchWithTimeout(`${apiBase}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model,
+        temperature: 0,
+        messages: [
+          { role: 'system', content: '返回 JSON 对象，不要 markdown。' },
+          { role: 'user', content: prompt }
+        ]
+      })
+    });
+
+    if (!resp.ok) {
+      throw new Error(`AI HTTP ${resp.status}`);
+    }
+
+    const data = await resp.json();
+    const text = data?.choices?.[0]?.message?.content || '{}';
+    const parsed = JSON.parse(text);
+    const zhTitle = cleanName(parsed.title || '');
+    if (!zhTitle || !hasChinese(zhTitle)) {
+      return null;
+    }
+    return zhTitle;
+  } catch (err) {
+    openAICircuit();
+    await logLine(`[WARN] infer chinese title fallback for ${cleanTitle}: ${err.message}`);
     return null;
   }
 }
@@ -479,6 +536,7 @@ async function createTask({ inputDir, outputDir }) {
 
   const seriesGroupMeta = new Map();
   const yearByTitleCache = new Map();
+  const zhTitleCache = new Map();
 
   async function resolveYearByTitle(title, typeHint) {
     const k = `${cleanName(title || '').toLowerCase()}::${typeHint || ''}`;
@@ -488,6 +546,16 @@ async function createTask({ inputDir, outputDir }) {
     const y = await inferYearFromTitleByAI(title, typeHint);
     yearByTitleCache.set(k, y);
     return y;
+  }
+
+  async function resolveChineseTitle(title, typeHint, yearHint) {
+    const k = `${cleanName(title || '').toLowerCase()}::${typeHint || ''}::${toSafeInt(yearHint) || 0}`;
+    if (zhTitleCache.has(k)) {
+      return zhTitleCache.get(k);
+    }
+    const zh = await inferChineseTitleByAI(title, typeHint, yearHint);
+    zhTitleCache.set(k, zh);
+    return zh;
   }
 
   for (const [key, groupItems] of seriesGroups.entries()) {
@@ -531,6 +599,13 @@ async function createTask({ inputDir, outputDir }) {
       const inferredYear = await resolveYearByTitle(localNameSource.title, ai.type);
       if (inferredYear) {
         ai.year = inferredYear;
+      }
+    }
+
+    if (TITLE_LANGUAGE === 'zh' && looksEnglishTitle(ai.title)) {
+      const zhTitle = await resolveChineseTitle(ai.title, ai.type, ai.year);
+      if (zhTitle) {
+        ai.title = zhTitle;
       }
     }
 
