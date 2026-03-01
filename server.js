@@ -783,6 +783,20 @@ async function ensureParentDir(filePath) {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
 }
 
+async function moveFileWithFallback(sourcePath, targetPath) {
+  try {
+    await fs.rename(sourcePath, targetPath);
+    return;
+  } catch (err) {
+    if (err?.code !== 'EXDEV') {
+      throw err;
+    }
+  }
+
+  await fs.copyFile(sourcePath, targetPath);
+  await fs.unlink(sourcePath);
+}
+
 async function uniquePath(destPath) {
   try {
     await fs.access(destPath);
@@ -877,7 +891,7 @@ async function moveSidecarSubtitles(entry, videoFinalPath) {
   for (const sub of sidecars) {
     const target = await uniquePath(`${videoFinalNoExt}${sub.suffix}${sub.ext}`);
     await ensureParentDir(target);
-    await fs.rename(sub.fullPath, target);
+    await moveFileWithFallback(sub.fullPath, target);
     moved.push({ from: sub.fullPath, to: target });
   }
   return moved;
@@ -955,7 +969,7 @@ async function applyTask(task) {
       const sourceParentDir = path.dirname(entry.sourcePath);
       const finalPath = await uniquePath(entry.target.fullPath);
       await ensureParentDir(finalPath);
-      await fs.rename(entry.sourcePath, finalPath);
+      await moveFileWithFallback(entry.sourcePath, finalPath);
       const movedSubtitles = await moveSidecarSubtitles(entry, finalPath);
       if (isWithinDir(sourceParentDir, task.inputDir) && sourceParentDir !== path.resolve(task.inputDir)) {
         await removeEmptyParentDirs(sourceParentDir, task.inputDir);
