@@ -101,7 +101,7 @@ function hideProgressBar() {
 }
 
 function computeSubtitleMetaForSingle(entry) {
-  const count = Array.isArray(entry.subtitleMappings) ? entry.subtitleMappings.length : 0;
+  const count = Array.isArray(entry.subtitleMappings) && entry.subtitleMappings.length > 0 ? 1 : 0;
   const expected = 1;
   let tone = '';
   if (count < expected) tone = 'subtitle-red';
@@ -110,14 +110,7 @@ function computeSubtitleMetaForSingle(entry) {
 }
 
 function computeSubtitleMetaForGroup(entries) {
-  const merged = [];
-  for (const e of entries) {
-    const ep = e.edited?.episode ? `E${String(e.edited.episode).padStart(2, '0')}` : 'E??';
-    for (const m of (e.subtitleMappings || [])) {
-      merged.push({ from: `${ep}:${m.from}`, to: m.to });
-    }
-  }
-  const count = merged.length;
+  const count = entries.filter((e) => Array.isArray(e.subtitleMappings) && e.subtitleMappings.length > 0).length;
   const expected = entries.length;
   let tone = '';
   if (count < expected) tone = 'subtitle-red';

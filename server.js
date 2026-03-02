@@ -24,11 +24,21 @@ function loadEnvWithEncodingFallback() {
     return;
   }
 
-  const utf8Parsed = dotenv.parse(raw.toString('utf8'));
+  function normalizeParsedEnv(obj) {
+    const out = {};
+    for (const [k, v] of Object.entries(obj || {})) {
+      const cleanKey = String(k || '').replace(/^\uFEFF/, '').trim();
+      if (!cleanKey) continue;
+      out[cleanKey] = v;
+    }
+    return out;
+  }
+
+  const utf8Parsed = normalizeParsedEnv(dotenv.parse(raw.toString('utf8')));
   let merged = { ...utf8Parsed };
 
   try {
-    const gbParsed = dotenv.parse(new TextDecoder('gb18030').decode(raw));
+    const gbParsed = normalizeParsedEnv(dotenv.parse(new TextDecoder('gb18030').decode(raw)));
     for (const key of Object.keys(gbParsed)) {
       const utf8Value = utf8Parsed[key];
       const gbValue = gbParsed[key];
