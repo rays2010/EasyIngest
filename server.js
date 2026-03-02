@@ -92,7 +92,7 @@ const TYPE_TO_DIR = {
   show: '节目'
 };
 const AI_REQUEST_TIMEOUT_MS = Number(process.env.AI_REQUEST_TIMEOUT_MS || 8000);
-const AI_CIRCUIT_BREAK_MS = Number(process.env.AI_CIRCUIT_BREAK_MS || 300000);
+const AI_CIRCUIT_BREAK_MS = Number(process.env.AI_CIRCUIT_BREAK_MS || 15000);
 const SCAN_CONCURRENCY = Number(process.env.SCAN_CONCURRENCY || 4);
 const APPLY_PROGRESS_SAVE_INTERVAL_MS = Number(process.env.APPLY_PROGRESS_SAVE_INTERVAL_MS || 400);
 let aiCircuitOpenUntil = 0;
@@ -354,7 +354,7 @@ async function parseByAI({ filename, cleanedTitleHint = '', folderHintName = '',
   const apiBase = process.env.AI_API_BASE || 'https://api.openai.com/v1';
   const model = process.env.AI_MODEL || 'gpt-4.1-mini';
 
-  if (!apiKey || isAICircuitOpen()) {
+  if (!apiKey) {
     return parseByHeuristic(filename);
   }
 
@@ -435,7 +435,7 @@ async function parseSeriesGroupByAI(fileNames, cleanedHints, folderHintName, cle
   const apiBase = process.env.AI_API_BASE || 'https://api.openai.com/v1';
   const model = process.env.AI_MODEL || 'gpt-4.1-mini';
 
-  if (!apiKey || isAICircuitOpen()) {
+  if (!apiKey) {
     return {
       title: fallback.title,
       year: fallback.year,
@@ -529,7 +529,7 @@ async function inferYearFromTitleByAI(title, typeHint = 'movie') {
   const model = process.env.AI_MODEL || 'gpt-4.1-mini';
   const cleanTitle = cleanName(title || '');
 
-  if (!apiKey || !cleanTitle || isAICircuitOpen()) {
+  if (!apiKey || !cleanTitle) {
     return null;
   }
 
@@ -576,7 +576,7 @@ async function inferChineseTitleByAI(title, typeHint = 'movie', yearHint = null)
   const safeTypeHint = ['movie', 'tv', 'anime', 'show'].includes(typeHint) ? typeHint : 'movie';
   const safeYearHint = toSafeInt(yearHint);
 
-  if (!apiKey || !cleanTitle || hasChinese(cleanTitle) || isAICircuitOpen()) {
+  if (!apiKey || !cleanTitle || hasChinese(cleanTitle)) {
     return null;
   }
 
