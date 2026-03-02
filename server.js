@@ -984,6 +984,55 @@ function splitSubtitleSuffix(fileName, originalBaseName) {
   return null;
 }
 
+function toStandardSubtitleLanguageCode(rawLanguage) {
+  const normalized = String(rawLanguage || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '_')
+    .replace(/[^a-z0-9_\-\u4e00-\u9fa5]/g, '');
+
+  if (!normalized) {
+    return 'und';
+  }
+
+  const mapping = new Map([
+    ['english', 'en'], ['eng', 'en'], ['en', 'en'],
+    ['chinese', 'zh'], ['chi', 'zh'], ['zho', 'zh'], ['zh', 'zh'], ['中文', 'zh'],
+    ['simplified_chinese', 'zh-Hans'], ['chinese_simplified', 'zh-Hans'], ['chs', 'zh-Hans'], ['简体中文', 'zh-Hans'],
+    ['traditional_chinese', 'zh-Hant'], ['chinese_traditional', 'zh-Hant'], ['cht', 'zh-Hant'], ['繁体中文', 'zh-Hant'],
+    ['japanese', 'ja'], ['jpn', 'ja'], ['ja', 'ja'], ['日语', 'ja'],
+    ['korean', 'ko'], ['kor', 'ko'], ['ko', 'ko'], ['韩语', 'ko'],
+    ['spanish', 'es'], ['spa', 'es'], ['es', 'es'],
+    ['french', 'fr'], ['fra', 'fr'], ['fre', 'fr'], ['fr', 'fr'],
+    ['german', 'de'], ['deu', 'de'], ['ger', 'de'], ['de', 'de'],
+    ['italian', 'it'], ['ita', 'it'], ['it', 'it'],
+    ['portuguese', 'pt'], ['por', 'pt'], ['pt', 'pt'],
+    ['brazilian_portuguese', 'pt-BR'], ['portuguese_br', 'pt-BR'], ['pt_br', 'pt-BR'], ['ptbr', 'pt-BR'],
+    ['russian', 'ru'], ['rus', 'ru'], ['ru', 'ru'],
+    ['arabic', 'ar'], ['ara', 'ar'], ['ar', 'ar'],
+    ['turkish', 'tr'], ['tur', 'tr'], ['tr', 'tr'],
+    ['thai', 'th'], ['tha', 'th'], ['th', 'th'],
+    ['indonesian', 'id'], ['ind', 'id'], ['id', 'id'],
+    ['vietnamese', 'vi'], ['vie', 'vi'], ['vi', 'vi'],
+    ['dutch', 'nl'], ['nld', 'nl'], ['dut', 'nl'], ['nl', 'nl'],
+    ['danish', 'da'], ['dan', 'da'], ['da', 'da'],
+    ['swedish', 'sv'], ['swe', 'sv'], ['sv', 'sv'],
+    ['norwegian', 'no'], ['nor', 'no'], ['bokmal', 'nb'], ['nb', 'nb'],
+    ['finnish', 'fi'], ['fin', 'fi'], ['fi', 'fi'],
+    ['polish', 'pl'], ['pol', 'pl'], ['pl', 'pl'],
+    ['czech', 'cs'], ['ces', 'cs'], ['cze', 'cs'], ['cs', 'cs'],
+    ['greek', 'el'], ['ell', 'el'], ['gre', 'el'], ['el', 'el'],
+    ['romanian', 'ro'], ['ron', 'ro'], ['rum', 'ro'], ['ro', 'ro'],
+    ['hungarian', 'hu'], ['hun', 'hu'], ['hu', 'hu'],
+    ['hebrew', 'he'], ['heb', 'he'], ['he', 'he']
+  ]);
+
+  if (mapping.has(normalized)) {
+    return mapping.get(normalized);
+  }
+  return normalized;
+}
+
 function buildSubtitleSuffixFromSubsName(fileNameNoExt) {
   const base = cleanName(String(fileNameNoExt || ''));
   if (!base) {
@@ -992,12 +1041,8 @@ function buildSubtitleSuffixFromSubsName(fileNameNoExt) {
   const m = base.match(/^(\d{1,3})\s*[-_ ]\s*(.+)$/);
   const track = m ? m[1] : '';
   const langRaw = m ? m[2] : base;
-  const lang = String(langRaw)
-    .trim()
-    .replace(/\s+/g, '_')
-    .replace(/[^a-zA-Z0-9_\-\u4e00-\u9fa5]/g, '')
-    .toLowerCase() || 'sub';
-  return track ? `.${lang}.${track}` : `.${lang}`;
+  const langCode = toStandardSubtitleLanguageCode(langRaw);
+  return track ? `.${langCode}.${track}` : `.${langCode}`;
 }
 
 async function collectSidecarSubtitles(entry) {
