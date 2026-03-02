@@ -272,6 +272,12 @@ function detectEpisodeMeta(normalizedName) {
     return { season: 1, episode: Number(ep[1]), pattern: 'ep' };
   }
 
+  // Scene/fansub naming: "Title - 07 [WebRip ...]"
+  const dashBracket = normalizedName.match(/-\s*0?(\d{1,3})\s*\[/);
+  if (dashBracket) {
+    return { season: 1, episode: Number(dashBracket[1]), pattern: 'dashbracket' };
+  }
+
   // Fansub-like naming: [Group][Title][01][BIG5]...
   const bracketNumbers = [...normalizedName.matchAll(/\[(\d{1,3})\]/g)]
     .map((m) => Number(m[1]))
@@ -297,7 +303,7 @@ function detectSeasonHint(normalizedName) {
     return Number(sxeSeason[1]);
   }
 
-  const seasonEn = normalizedName.match(/(?:^|[\s._-])(?:season|s)\s*0?(\d{1,2})(?:[\s._-]|$)/i);
+  const seasonEn = normalizedName.match(/(?:^|[\s._\-\[])(?:season|s)\s*0?(\d{1,2})(?:[\s._\-\]]|$)/i);
   if (seasonEn) {
     return Number(seasonEn[1]);
   }
@@ -411,6 +417,8 @@ function parseByHeuristic(filename) {
     titleBase = titleBase.replace(/第\s*\d{1,3}\s*[集话話].*/i, '');
   } else if (episodeMeta?.pattern === 'ep') {
     titleBase = titleBase.replace(/(?:^|[\s._-])(?:ep?|e)\s*\d{1,3}.*/i, '');
+  } else if (episodeMeta?.pattern === 'dashbracket') {
+    titleBase = titleBase.replace(/-\s*0?\d{1,3}\s*\[.*/i, '');
   } else if (episodeMeta?.pattern === 'bracket') {
     titleBase = titleBase.replace(/\[\d{1,3}\].*/i, '');
   } else if (episodeMeta?.pattern === 'index') {
