@@ -342,7 +342,7 @@ async function parseByAI({ filename, cleanedTitleHint = '', folderHintName = '',
     TITLE_LANGUAGE === 'en'
       ? 'title 必须使用英文官方名（不要中文译名）。'
       : 'title 必须使用简体中文常用译名（不要英文名）。';
-  const prompt = `你是影视文件识别器。根据“清洗后的标题提示 + 原始文件名 + 目录提示”输出严格 JSON，不要输出任何额外文字。\n字段：title(string),year(number|null),type(movie|tv|anime|show),season(number|null),episode(number|null),confidence(0-1)。\n额外规则：${languageRule}\n要求：优先基于清洗后的标题提示识别真实作品；忽略网址、分辨率、编码、字幕、原创等噪声。\n清洗后的标题提示：${cleanedTitleHint || ''}\n目录提示：${folderHintName || ''}\n原始文件名：${filename}\n集数提示：${episodeHint ? `S${episodeHint.season}E${episodeHint.episode}` : ''}\n年份提示：${yearHint || ''}`;
+  const prompt = `你是影视文件识别器。根据“清洗后的标题提示 + 原始文件名 + 目录提示”输出严格 JSON，不要输出任何额外文字。\n字段：title(string),year(number|null),type(movie|tv|anime|show),season(number|null),episode(number|null),confidence(0-1)。\n额外规则：${languageRule}\n类型规则：只要作品是动画内容（包含日漫、欧美动画、动画剧集、cartoon、animated series），type 必须返回 anime，不要返回 tv。\n要求：优先基于清洗后的标题提示识别真实作品；忽略网址、分辨率、编码、字幕、原创等噪声。\n清洗后的标题提示：${cleanedTitleHint || ''}\n目录提示：${folderHintName || ''}\n原始文件名：${filename}\n集数提示：${episodeHint ? `S${episodeHint.season}E${episodeHint.episode}` : ''}\n年份提示：${yearHint || ''}`;
 
   try {
     const resp = await fetchWithTimeout(`${apiBase}/chat/completions`, {
@@ -430,7 +430,7 @@ async function parseSeriesGroupByAI(fileNames, cleanedHints, folderHintName, cle
       ? 'title 必须使用英文官方名（不要中文译名）。'
       : 'title 必须使用简体中文常用译名（不要英文名）。';
 
-  const prompt = `你是剧集文件名识别器。下面这些文件来自同一部剧集，请输出统一信息。\n输出严格 JSON，不要输出任何额外文字。\n字段：title(string),year(number|null),type(tv|anime|show),confidence(0-1)。\n额外规则：${languageRule}\n识别优先级：优先依据“清洗后的目录提示”，文件名仅作辅助。\n清洗后的目录提示：${cleanedFolderHint || ''}\n原始剧集目录名：${folderHintName}\n清洗后的文件提示列表：${cleanedHints.join(' | ')}\n原始文件名列表：${fileNames.join(' | ')}`;
+  const prompt = `你是剧集文件名识别器。下面这些文件来自同一部剧集，请输出统一信息。\n输出严格 JSON，不要输出任何额外文字。\n字段：title(string),year(number|null),type(tv|anime|show),confidence(0-1)。\n额外规则：${languageRule}\n类型规则：只要该剧是动画内容（包含日漫、欧美动画、cartoon、animated series），type 必须返回 anime，不要返回 tv。\n识别优先级：优先依据“清洗后的目录提示”，文件名仅作辅助。\n清洗后的目录提示：${cleanedFolderHint || ''}\n原始剧集目录名：${folderHintName}\n清洗后的文件提示列表：${cleanedHints.join(' | ')}\n原始文件名列表：${fileNames.join(' | ')}`;
 
   try {
     const resp = await fetchWithTimeout(`${apiBase}/chat/completions`, {
