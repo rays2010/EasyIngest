@@ -91,6 +91,12 @@ function formatBytes(bytes) {
   return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
+function shorten(text, max = 48) {
+  const s = String(text || '');
+  if (s.length <= max) return s;
+  return `${s.slice(0, max)}...`;
+}
+
 function updateProgressBar(percent) {
   const p = Math.max(0, Math.min(100, Number(percent) || 0));
   progressWrapEl.classList.remove('hidden');
@@ -102,16 +108,13 @@ function hideProgressBar() {
   progressBarEl.style.width = '0%';
 }
 
-function formatSubtitleSummary(mappings, maxLines = 4) {
+function formatSubtitleSummary(mappings) {
   const list = Array.isArray(mappings) ? mappings : [];
   if (list.length === 0) {
     return '-';
   }
-  const lines = list.slice(0, maxLines).map((m) => `${m.from} -> ${m.to}`);
-  if (list.length > maxLines) {
-    lines.push(`...共 ${list.length} 条`);
-  }
-  return lines.join('<br/>');
+  const first = list[0];
+  return `${shorten(first.from)} -> ${shorten(first.to)}（共 ${list.length} 条）`;
 }
 
 function formatGroupSubtitleSummary(entries) {
@@ -122,7 +125,7 @@ function formatGroupSubtitleSummary(entries) {
       merged.push({ from: `${ep}:${m.from}`, to: m.to });
     }
   }
-  return formatSubtitleSummary(merged, 5);
+  return formatSubtitleSummary(merged);
 }
 
 function buildDisplayRows(task) {
