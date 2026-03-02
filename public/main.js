@@ -44,10 +44,8 @@ function rowHtml(entry) {
       <td><input data-key="title" value="${entry.edited.title || ''}" /></td>
       <td><input data-key="year" value="${entry.edited.year || ''}" /></td>
       <td><select data-key="type">${typeOptions}</select></td>
-      <td>${entry.episodeSummary || '-'}</td>
       <td class="subtitle-map">${entry.subtitleSummary || '-'}</td>
       <td class="path">${entry.target?.fullPath || ''}</td>
-      <td>${entry.status || 'pending'} ${entry.reason ? `(${entry.reason})` : ''}</td>
     </tr>
   `;
 }
