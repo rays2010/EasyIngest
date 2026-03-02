@@ -1231,7 +1231,7 @@ async function applyTask(task) {
   };
 
   task.applyStatus = 'running';
-  const selectedEntries = task.entries.filter((e) => e.selected);
+  const selectedEntries = task.entries.filter((e) => e.selected && e.status !== 'success');
   task.applyTotal = selectedEntries.length;
   task.applyDone = 0;
   task.applyBytesTotal = selectedEntries.reduce((sum, e) => sum + (toSafeInt(e.size) || 0), 0);
@@ -1248,6 +1248,11 @@ async function applyTask(task) {
       entry.status = 'skipped';
       entry.reason = 'not selected';
       result.details.push({ entryId: entry.id, status: 'skipped', reason: 'not selected' });
+      continue;
+    }
+    if (entry.status === 'success') {
+      result.skipped += 1;
+      result.details.push({ entryId: entry.id, status: 'skipped', reason: 'already applied' });
       continue;
     }
 
@@ -1277,6 +1282,7 @@ async function applyTask(task) {
       }
       entry.status = 'success';
       entry.reason = '';
+      entry.selected = false;
       entry.appliedPath = finalPath;
       result.success += 1;
       result.details.push({
@@ -1437,7 +1443,7 @@ app.post('/api/tasks/:id/apply', async (req, res) => {
     }
 
     task.applyStatus = 'running';
-    const selectedEntries = task.entries.filter((e) => e.selected);
+    const selectedEntries = task.entries.filter((e) => e.selected && e.status !== 'success');
     task.applyTotal = selectedEntries.length;
     task.applyDone = 0;
     task.applyBytesTotal = selectedEntries.reduce((sum, e) => sum + (toSafeInt(e.size) || 0), 0);

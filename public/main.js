@@ -265,6 +265,18 @@ function stopScanPolling() {
 
 async function refreshTask(taskId) {
   const task = await requestJson(`/api/tasks/${taskId}`);
+  normalizeTask(task);
+  state.task = task;
+  renderTask();
+  if ((task.scanStatus === 'completed' || task.scanStatus === 'failed')
+    && (task.applyStatus === 'idle' || task.applyStatus === 'completed' || task.applyStatus === 'failed')) {
+    stopScanPolling();
+    scanBtn.disabled = false;
+  }
+}
+
+function normalizeTask(task) {
+  if (!task) return;
   if (task.applyStatus === 'completed' && task.lastApplyResult) {
     const success = task.lastApplyResult.success || 0;
     const failed = task.lastApplyResult.failed || 0;
@@ -272,13 +284,6 @@ async function refreshTask(taskId) {
     state.applyNotice = failed > 0
       ? `执行完成：成功 ${success}，失败 ${failed}。`
       : `执行成功：已处理 ${success} 个文件。`;
-  }
-  state.task = task;
-  renderTask();
-  if ((task.scanStatus === 'completed' || task.scanStatus === 'failed')
-    && (task.applyStatus === 'idle' || task.applyStatus === 'completed' || task.applyStatus === 'failed')) {
-    stopScanPolling();
-    scanBtn.disabled = false;
   }
 }
 
@@ -377,6 +382,7 @@ recomputeBtn.addEventListener('click', async () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ entries: collectEntriesForUpdate() })
     });
+    normalizeTask(task);
     state.task = task;
     renderTask();
   } catch (err) {
