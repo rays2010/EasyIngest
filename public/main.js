@@ -91,12 +91,6 @@ function formatBytes(bytes) {
   return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
-function shorten(text, max = 48) {
-  const s = String(text || '');
-  if (s.length <= max) return s;
-  return `${s.slice(0, max)}...`;
-}
-
 function updateProgressBar(percent) {
   const p = Math.max(0, Math.min(100, Number(percent) || 0));
   progressWrapEl.classList.remove('hidden');
@@ -108,16 +102,16 @@ function hideProgressBar() {
   progressBarEl.style.width = '0%';
 }
 
-function formatSubtitleSummary(mappings) {
-  const list = Array.isArray(mappings) ? mappings : [];
-  if (list.length === 0) {
-    return '-';
-  }
-  const first = list[0];
-  return `${shorten(first.from)} -> ${shorten(first.to)}（共 ${list.length} 条）`;
+function computeSubtitleMetaForSingle(entry) {
+  const count = Array.isArray(entry.subtitleMappings) ? entry.subtitleMappings.length : 0;
+  const expected = 1;
+  let tone = '';
+  if (count < expected) tone = 'subtitle-red';
+  else if (count > expected) tone = 'subtitle-yellow';
+  return { count, expected, tone };
 }
 
-function formatGroupSubtitleSummary(entries) {
+function computeSubtitleMetaForGroup(entries) {
   const merged = [];
   for (const e of entries) {
     const ep = e.edited?.episode ? `E${String(e.edited.episode).padStart(2, '0')}` : 'E??';
@@ -125,7 +119,18 @@ function formatGroupSubtitleSummary(entries) {
       merged.push({ from: `${ep}:${m.from}`, to: m.to });
     }
   }
-  return formatSubtitleSummary(merged);
+  const count = merged.length;
+  const expected = entries.length;
+  let tone = '';
+  if (count < expected) tone = 'subtitle-red';
+  else if (count > expected) tone = 'subtitle-yellow';
+  return { count, expected, tone };
+}
+
+function renderSubtitleMeta(meta) {
+  if (!meta || !meta.count) return '-';
+  const cls = meta.tone ? `subtitle-count ${meta.tone}` : 'subtitle-count';
+  return `<span class="${cls}">匹配 ${meta.count} / 影片 ${meta.expected}</span>`;
 }
 
 function buildDisplayRows(task) {
@@ -146,17 +151,19 @@ function buildDisplayRows(task) {
     const shouldGroup = SERIES_TYPES.has(e.edited.type) && groupEntries.length >= 2;
     if (!shouldGroup) {
       visited.add(e.id);
+      const subtitleMeta = computeSubtitleMetaForSingle(e);
       rows.push({
         ...e,
         kind: 'single',
         episodeSummary: e.edited.season && e.edited.episode ? `S${String(e.edited.season).padStart(2, '0')}E${String(e.edited.episode).padStart(2, '0')}` : '-',
-        subtitleSummary: formatSubtitleSummary(e.subtitleMappings || [])
+        subtitleSummary: renderSubtitleMeta(subtitleMeta)
       });
       continue;
     }
 
     for (const item of groupEntries) visited.add(item.id);
     const first = groupEntries[0];
+    const subtitleMeta = computeSubtitleMetaForGroup(groupEntries);
     rows.push({
       id: `group:${key}`,
       kind: 'group',
@@ -172,7 +179,7 @@ function buildDisplayRows(task) {
       status: aggregateStatus(groupEntries),
       reason: '',
       episodeSummary: summarizeEpisodes(groupEntries),
-      subtitleSummary: formatGroupSubtitleSummary(groupEntries)
+      subtitleSummary: renderSubtitleMeta(subtitleMeta)
     });
   }
   return rows;

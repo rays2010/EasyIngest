@@ -124,6 +124,18 @@ td select {
   white-space: pre-wrap;
 }
 
+.subtitle-count {
+  font-weight: 600;
+}
+
+.subtitle-red {
+  color: #b42318;
+}
+
+.subtitle-yellow {
+  color: #b54708;
+}
+
 pre {
   margin: 0;
   white-space: pre-wrap;
