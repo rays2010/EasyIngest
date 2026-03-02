@@ -4,7 +4,7 @@ const fsSync = require('fs');
 const fs = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
-const { ProxyAgent, setGlobalDispatcher } = require('undici');
+const { ProxyAgent, setGlobalDispatcher, Agent } = require('undici');
 
 function looksMojibake(text) {
   if (typeof text !== 'string') {
@@ -72,6 +72,7 @@ if (upstreamProxy) {
     console.error(`[WARN] invalid proxy url, fallback to direct fetch: ${err.message}`);
   }
 }
+const directAgent = new Agent();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -124,6 +125,22 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = AI_REQUEST_TIMEOU
   const timer = setTimeout(() => ctrl.abort(new Error('AI request timeout')), timeoutMs);
   try {
     return await fetch(url, { ...options, signal: ctrl.signal });
+  } catch (err) {
+    const canRetryDirect = Boolean(upstreamProxy) && !options.dispatcher;
+    if (!canRetryDirect) {
+      throw err;
+    }
+    const directCtrl = new AbortController();
+    const directTimer = setTimeout(() => directCtrl.abort(new Error('AI request timeout (direct retry)')), timeoutMs);
+    try {
+      return await fetch(url, {
+        ...options,
+        signal: directCtrl.signal,
+        dispatcher: directAgent
+      });
+    } finally {
+      clearTimeout(directTimer);
+    }
   } finally {
     clearTimeout(timer);
   }
