@@ -13,6 +13,8 @@ const recomputeBtn = document.getElementById('recomputeBtn');
 const applyBtn = document.getElementById('applyBtn');
 const summaryEl = document.getElementById('summary');
 const tbody = document.querySelector('#resultTable tbody');
+const progressWrapEl = document.getElementById('progressWrap');
+const progressBarEl = document.getElementById('progressBar');
 
 async function loadConfig() {
   try {
@@ -43,6 +45,7 @@ function rowHtml(entry) {
       <td><input data-key="year" value="${entry.edited.year || ''}" /></td>
       <td><select data-key="type">${typeOptions}</select></td>
       <td>${entry.episodeSummary || '-'}</td>
+      <td class="subtitle-map">${entry.subtitleSummary || '-'}</td>
       <td class="path">${entry.target?.fullPath || ''}</td>
       <td>${entry.status || 'pending'} ${entry.reason ? `(${entry.reason})` : ''}</td>
     </tr>
@@ -88,6 +91,40 @@ function formatBytes(bytes) {
   return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
+function updateProgressBar(percent) {
+  const p = Math.max(0, Math.min(100, Number(percent) || 0));
+  progressWrapEl.classList.remove('hidden');
+  progressBarEl.style.width = `${p}%`;
+}
+
+function hideProgressBar() {
+  progressWrapEl.classList.add('hidden');
+  progressBarEl.style.width = '0%';
+}
+
+function formatSubtitleSummary(mappings, maxLines = 4) {
+  const list = Array.isArray(mappings) ? mappings : [];
+  if (list.length === 0) {
+    return '-';
+  }
+  const lines = list.slice(0, maxLines).map((m) => `${m.from} -> ${m.to}`);
+  if (list.length > maxLines) {
+    lines.push(`...共 ${list.length} 条`);
+  }
+  return lines.join('<br/>');
+}
+
+function formatGroupSubtitleSummary(entries) {
+  const merged = [];
+  for (const e of entries) {
+    const ep = e.edited?.episode ? `E${String(e.edited.episode).padStart(2, '0')}` : 'E??';
+    for (const m of (e.subtitleMappings || [])) {
+      merged.push({ from: `${ep}:${m.from}`, to: m.to });
+    }
+  }
+  return formatSubtitleSummary(merged, 5);
+}
+
 function buildDisplayRows(task) {
   const entries = task.entries || [];
   const groups = new Map();
@@ -109,7 +146,8 @@ function buildDisplayRows(task) {
       rows.push({
         ...e,
         kind: 'single',
-        episodeSummary: e.edited.season && e.edited.episode ? `S${String(e.edited.season).padStart(2, '0')}E${String(e.edited.episode).padStart(2, '0')}` : '-'
+        episodeSummary: e.edited.season && e.edited.episode ? `S${String(e.edited.season).padStart(2, '0')}E${String(e.edited.episode).padStart(2, '0')}` : '-',
+        subtitleSummary: formatSubtitleSummary(e.subtitleMappings || [])
       });
       continue;
     }
@@ -130,7 +168,8 @@ function buildDisplayRows(task) {
       target: first.target,
       status: aggregateStatus(groupEntries),
       reason: '',
-      episodeSummary: summarizeEpisodes(groupEntries)
+      episodeSummary: summarizeEpisodes(groupEntries),
+      subtitleSummary: formatGroupSubtitleSummary(groupEntries)
     });
   }
   return rows;
@@ -140,6 +179,7 @@ function renderTask() {
   if (!state.task) {
     tbody.innerHTML = '';
     summaryEl.textContent = '';
+    hideProgressBar();
     recomputeBtn.disabled = true;
     applyBtn.disabled = true;
     return;
@@ -161,6 +201,7 @@ function renderTask() {
     const totalBytes = state.task.applyBytesTotal || 0;
     const bytePercent = totalBytes > 0 ? ((doneBytes / totalBytes) * 100).toFixed(1) : '0.0';
     summaryEl.textContent = `任务ID: ${state.task.id} | 正在执行 ${done}/${all} (${filePercent}%) | 数据进度 ${formatBytes(doneBytes)}/${formatBytes(totalBytes)} (${bytePercent}%) | 当前：${current}`;
+    updateProgressBar(bytePercent);
     scanBtn.disabled = true;
     recomputeBtn.disabled = true;
     applyBtn.disabled = true;
@@ -169,6 +210,7 @@ function renderTask() {
   if (applyStatus === 'failed') {
     const err = state.task.applyError || 'unknown error';
     summaryEl.textContent = `任务ID: ${state.task.id} | 执行失败：${err}`;
+    hideProgressBar();
     scanBtn.disabled = false;
     recomputeBtn.disabled = false;
     applyBtn.disabled = false;
@@ -177,6 +219,7 @@ function renderTask() {
 
   if (applyStatus === 'completed') {
     summaryEl.textContent = state.applyNotice || '执行完成';
+    hideProgressBar();
     scanBtn.disabled = false;
     recomputeBtn.disabled = total === 0;
     applyBtn.disabled = total === 0;
@@ -188,6 +231,8 @@ function renderTask() {
     const all = state.task.scanTotal || 0;
     const current = state.task.currentFile || '-';
     summaryEl.textContent = `任务ID: ${state.task.id} | 正在识别 ${done}/${all} | 当前：${current} | 已展示 ${state.displayRows.length} 行`;
+    const scanPercent = all > 0 ? ((done / all) * 100).toFixed(1) : '0.0';
+    updateProgressBar(scanPercent);
     scanBtn.disabled = true;
     recomputeBtn.disabled = true;
     applyBtn.disabled = true;
@@ -196,6 +241,7 @@ function renderTask() {
   if (scanStatus === 'failed') {
     const err = state.task.scanError || 'unknown error';
     summaryEl.textContent = `任务ID: ${state.task.id} | 识别失败：${err}`;
+    hideProgressBar();
     scanBtn.disabled = false;
     recomputeBtn.disabled = true;
     applyBtn.disabled = true;
@@ -204,6 +250,7 @@ function renderTask() {
 
   scanBtn.disabled = false;
   summaryEl.textContent = `任务ID: ${state.task.id} | 视频共 ${total} 条，已勾选 ${selected} 条，展示 ${state.displayRows.length} 行`;
+  hideProgressBar();
   recomputeBtn.disabled = total === 0;
   applyBtn.disabled = total === 0;
 }

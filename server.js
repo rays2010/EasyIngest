@@ -844,7 +844,7 @@ async function createTask({ inputDir, outputDir, taskId = crypto.randomUUID(), o
       }
     }
 
-    task.entries.push({
+    const entry = {
       id: crypto.randomUUID(),
       sourcePath: item.file,
       sourceName: item.basename,
@@ -862,10 +862,18 @@ async function createTask({ inputDir, outputDir, taskId = crypto.randomUUID(), o
       selected: true,
       status: 'pending',
       reason: '',
-      target: null
-    });
+      target: null,
+      subtitleMappings: []
+    };
+    task.entries.push(entry);
     task.scanDone += 1;
     recomputeTargets(task);
+    try {
+      entry.subtitleMappings = await buildSubtitleMappingsForEntry(entry);
+    } catch (err) {
+      entry.subtitleMappings = [];
+      await logLine(`[WARN] subtitle mapping failed ${entry.sourcePath}: ${err.message}`);
+    }
     await pushProgress();
   }
 
@@ -1110,6 +1118,37 @@ async function moveSidecarSubtitles(entry, videoFinalPath) {
     moved.push({ from: sub.fullPath, to: target });
   }
   return moved;
+}
+
+async function buildSubtitleMappingsForEntry(entry) {
+  if (!entry?.target?.fullPath) {
+    return [];
+  }
+  const sidecars = await collectSidecarSubtitles(entry);
+  if (sidecars.length === 0) {
+    return [];
+  }
+  const sourceParent = path.dirname(entry.sourcePath);
+  const videoFinalNoExt = entry.target.fullPath.slice(0, -path.extname(entry.target.fullPath).length);
+  return sidecars.map((sub) => {
+    const fromRel = path.relative(sourceParent, sub.fullPath) || path.basename(sub.fullPath);
+    const toName = path.basename(`${videoFinalNoExt}${sub.suffix}${sub.ext}`);
+    return {
+      from: fromRel,
+      to: toName
+    };
+  });
+}
+
+async function refreshSubtitleMappingsForTask(task) {
+  for (const entry of task.entries) {
+    try {
+      entry.subtitleMappings = await buildSubtitleMappingsForEntry(entry);
+    } catch (err) {
+      entry.subtitleMappings = [];
+      await logLine(`[WARN] subtitle mapping failed ${entry.sourcePath}: ${err.message}`);
+    }
+  }
 }
 
 async function removeAllFilesAndEmptyDirs(rootDir) {
@@ -1358,6 +1397,7 @@ app.post('/api/tasks/:id/recompute', async (req, res) => {
     }
 
     recomputeTargets(task);
+    await refreshSubtitleMappingsForTask(task);
     await saveTask(task);
     return res.json(task);
   } catch (err) {

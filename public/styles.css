@@ -72,6 +72,24 @@ button[disabled] {
   margin-top: 6px;
 }
 
+.progress-wrap {
+  height: 10px;
+  border-radius: 999px;
+  background: #e9eef8;
+  overflow: hidden;
+}
+
+.progress-bar {
+  width: 0%;
+  height: 100%;
+  background: linear-gradient(90deg, #1f6feb, #4fa3ff);
+  transition: width 0.35s ease;
+}
+
+.hidden {
+  display: none;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
@@ -96,6 +114,14 @@ td select {
 .path {
   font-family: ui-monospace, Menlo, monospace;
   font-size: 12px;
+}
+
+.subtitle-map {
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  max-width: 420px;
+  white-space: pre-wrap;
 }
 
 pre {
