@@ -101,7 +101,7 @@ function hideProgressBar() {
 }
 
 function computeSubtitleMetaForSingle(entry) {
-  const count = Array.isArray(entry.subtitleMappings) && entry.subtitleMappings.length > 0 ? 1 : 0;
+  const count = Array.isArray(entry.subtitleMappings) ? entry.subtitleMappings.length : 0;
   const expected = 1;
   let tone = '';
   if (count < expected) tone = 'subtitle-red';
@@ -110,7 +110,7 @@ function computeSubtitleMetaForSingle(entry) {
 }
 
 function computeSubtitleMetaForGroup(entries) {
-  const count = entries.filter((e) => Array.isArray(e.subtitleMappings) && e.subtitleMappings.length > 0).length;
+  const count = entries.reduce((sum, e) => sum + ((e.subtitleMappings || []).length), 0);
   const expected = entries.length;
   let tone = '';
   if (count < expected) tone = 'subtitle-red';
@@ -119,9 +119,9 @@ function computeSubtitleMetaForGroup(entries) {
 }
 
 function renderSubtitleMeta(meta) {
-  if (!meta || !meta.count) return '-';
+  if (!meta) return '-';
   const cls = meta.tone ? `subtitle-count ${meta.tone}` : 'subtitle-count';
-  return `<span class="${cls}">匹配 ${meta.count} / 影片 ${meta.expected}</span>`;
+  return `<span class="${cls}">${meta.expected}/${meta.count}</span>`;
 }
 
 function buildDisplayRows(task) {
