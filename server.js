@@ -64,6 +64,13 @@ const upstreamProxy =
   process.env.HTTP_PROXY ||
   process.env.ALL_PROXY ||
   '';
+const aiBaseHost = (() => {
+  try {
+    return new URL(process.env.AI_API_BASE || '').host;
+  } catch {
+    return '';
+  }
+})();
 if (upstreamProxy) {
   try {
     setGlobalDispatcher(new ProxyAgent(upstreamProxy));
@@ -73,6 +80,26 @@ if (upstreamProxy) {
   }
 }
 const directAgent = new Agent();
+
+function shouldBypassProxyForUrl(url) {
+  if (!upstreamProxy) {
+    return false;
+  }
+  const forceBypass = String(process.env.AI_BYPASS_PROXY || '').toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(forceBypass)) {
+    return true;
+  }
+  if (forceBypass === '0' || forceBypass === 'false' || forceBypass === 'off') {
+    return false;
+  }
+  try {
+    const reqHost = new URL(url).host;
+    // Auto bypass for AI_API_BASE host (e.g. domestic relay).
+    return Boolean(aiBaseHost) && reqHost === aiBaseHost;
+  } catch {
+    return false;
+  }
+}
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -125,6 +152,20 @@ function openAICircuit() {
 }
 
 async function fetchWithTimeout(url, options = {}, timeoutMs = AI_REQUEST_TIMEOUT_MS) {
+  if (shouldBypassProxyForUrl(url)) {
+    const directCtrl = new AbortController();
+    const directTimer = setTimeout(() => directCtrl.abort(new Error('AI request timeout (direct)')), timeoutMs);
+    try {
+      return await fetch(url, {
+        ...options,
+        signal: directCtrl.signal,
+        dispatcher: directAgent
+      });
+    } finally {
+      clearTimeout(directTimer);
+    }
+  }
+
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(new Error('AI request timeout')), timeoutMs);
   try {
