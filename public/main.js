@@ -119,7 +119,7 @@ function computeSubtitleMetaForGroup(entries) {
 }
 
 function renderSubtitleMeta(meta) {
-  if (!meta) return '-';
+  if (!meta || !meta.count) return '';
   const cls = meta.tone ? `subtitle-count ${meta.tone}` : 'subtitle-count';
   return `<span class="${cls}">${meta.expected}/${meta.count}</span>`;
 }
@@ -250,7 +250,10 @@ function renderTask() {
   }
 
   scanBtn.disabled = false;
-  summaryEl.textContent = `任务ID: ${state.task.id} | 视频共 ${total} 条，已勾选 ${selected} 条，展示 ${state.displayRows.length} 行`;
+  const timeoutNotice = (state.task.aiTimeoutCount || 0) > 0
+    ? ` | 提示：AI 识别超时 ${state.task.aiTimeoutCount} 次，部分结果已回退本地识别`
+    : '';
+  summaryEl.textContent = `任务ID: ${state.task.id} | 视频共 ${total} 条，已勾选 ${selected} 条，展示 ${state.displayRows.length} 行${timeoutNotice}`;
   hideProgressBar();
   recomputeBtn.disabled = total === 0;
   applyBtn.disabled = total === 0;

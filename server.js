@@ -112,6 +112,10 @@ function nowISO() {
   return new Date().toISOString();
 }
 
+function isAIRequestTimeout(err) {
+  return /timeout/i.test(String(err?.message || ''));
+}
+
 function isAICircuitOpen() {
   return Date.now() < aiCircuitOpenUntil;
 }
@@ -372,7 +376,7 @@ async function parseByAI({ filename, cleanedTitleHint = '', folderHintName = '',
   const model = process.env.AI_MODEL || 'gpt-4.1-mini';
 
   if (!apiKey) {
-    return parseByHeuristic(filename);
+    return { ...parseByHeuristic(filename), aiTimedOut: false };
   }
 
   const languageRule =
@@ -417,12 +421,17 @@ async function parseByAI({ filename, cleanedTitleHint = '', folderHintName = '',
       season: toSafeInt(parsed.season),
       episode: toSafeInt(parsed.episode),
       confidence: Number.isFinite(parsed.confidence) ? parsed.confidence : 0.5,
-      source: 'ai'
+      source: 'ai',
+      aiTimedOut: false
     };
   } catch (err) {
     openAICircuit();
     await logLine(`[WARN] AI fallback for ${filename}: ${err.message}`);
-    return parseByHeuristic(filename);
+    return {
+      ...parseByHeuristic(filename),
+      source: isAIRequestTimeout(err) ? 'heuristic-timeout' : 'heuristic',
+      aiTimedOut: isAIRequestTimeout(err)
+    };
   }
 }
 
@@ -458,7 +467,8 @@ async function parseSeriesGroupByAI(fileNames, cleanedHints, folderHintName, cle
       year: fallback.year,
       type: 'tv',
       confidence: 0.4,
-      source: 'heuristic-group'
+      source: 'heuristic-group',
+      aiTimedOut: false
     };
   }
 
@@ -500,7 +510,8 @@ async function parseSeriesGroupByAI(fileNames, cleanedHints, folderHintName, cle
       year: toSafeInt(parsed.year),
       type,
       confidence: Number.isFinite(parsed.confidence) ? parsed.confidence : 0.7,
-      source: 'ai-group'
+      source: 'ai-group',
+      aiTimedOut: false
     };
   } catch (err) {
     openAICircuit();
@@ -510,7 +521,8 @@ async function parseSeriesGroupByAI(fileNames, cleanedHints, folderHintName, cle
       year: fallback.year,
       type: 'tv',
       confidence: 0.4,
-      source: 'heuristic-group'
+      source: isAIRequestTimeout(err) ? 'heuristic-group-timeout' : 'heuristic-group',
+      aiTimedOut: isAIRequestTimeout(err)
     };
   }
 }
@@ -731,6 +743,7 @@ async function createTask({ inputDir, outputDir, taskId = crypto.randomUUID(), o
     scanStatus: 'running',
     scanTotal: 0,
     scanDone: 0,
+    aiTimeoutCount: 0,
     currentFile: '',
     scanError: '',
     applyStatus: 'idle',
@@ -827,6 +840,9 @@ async function createTask({ inputDir, outputDir, taskId = crypto.randomUUID(), o
       cleanedFolderHint,
       fallback
     );
+    if (aiGroup.aiTimedOut) {
+      task.aiTimeoutCount += 1;
+    }
     seriesGroupMeta.set(key, aiGroup);
   }
 
@@ -847,6 +863,9 @@ async function createTask({ inputDir, outputDir, taskId = crypto.randomUUID(), o
             : null,
           yearHint: item.heuristic.year
         });
+    if (aiSingle?.aiTimedOut) {
+      task.aiTimeoutCount += 1;
+    }
     const ai = groupMeta
       ? {
           title: groupMeta.title || item.seriesHintHeuristic.title || item.heuristic.title || item.originalNameNoExt,
@@ -1389,6 +1408,7 @@ app.post('/api/scan', async (req, res) => {
       scanStatus: 'running',
       scanTotal: 0,
       scanDone: 0,
+      aiTimeoutCount: 0,
       currentFile: '',
       scanError: '',
       applyStatus: 'idle',
