@@ -1140,6 +1140,35 @@ async function moveSidecarSubtitles(entry, videoFinalPath) {
   return moved;
 }
 
+async function cleanupProcessedEntrySourceDirs(entry, movedSubtitles, inputRootDir) {
+  const inputRoot = path.resolve(inputRootDir);
+  const sourceParentDir = path.dirname(entry.sourcePath);
+
+  // 1) Remove empty dirs left by subtitle packs, e.g. Subs/<episode-name>/
+  for (const sub of movedSubtitles || []) {
+    const subtitleSourceParent = path.dirname(sub.from);
+    if (isWithinDir(subtitleSourceParent, inputRoot)) {
+      await removeEmptyParentDirs(subtitleSourceParent, inputRoot);
+    }
+  }
+
+  // 2) Remove companion folder that matches original video basename, e.g. <VideoName>/1.jpg
+  const companionDir = path.join(sourceParentDir, entry.originalNameNoExt);
+  try {
+    const stat = await fs.stat(companionDir);
+    if (stat.isDirectory() && isWithinDir(companionDir, inputRoot)) {
+      const hasVideos = await hasAnyVideoFiles(companionDir);
+      if (!hasVideos) {
+        await removeAllFilesAndEmptyDirs(companionDir);
+      }
+    }
+  } catch (err) {
+    if (!err || err.code !== 'ENOENT') {
+      throw err;
+    }
+  }
+}
+
 async function buildSubtitleMappingsForEntry(entry) {
   if (!entry?.target?.fullPath) {
     return [];
@@ -1277,6 +1306,7 @@ async function applyTask(task) {
       });
       task.currentApplyFileBytesDone = task.currentApplyFileBytes;
       const movedSubtitles = await moveSidecarSubtitles(entry, finalPath);
+      await cleanupProcessedEntrySourceDirs(entry, movedSubtitles, task.inputDir);
       if (isWithinDir(sourceParentDir, task.inputDir) && sourceParentDir !== path.resolve(task.inputDir)) {
         await removeEmptyParentDirs(sourceParentDir, task.inputDir);
       }
