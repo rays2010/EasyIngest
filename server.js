@@ -984,10 +984,27 @@ function splitSubtitleSuffix(fileName, originalBaseName) {
   return null;
 }
 
+function buildSubtitleSuffixFromSubsName(fileNameNoExt) {
+  const base = cleanName(String(fileNameNoExt || ''));
+  if (!base) {
+    return '.sub';
+  }
+  const m = base.match(/^(\d{1,3})\s*[-_ ]\s*(.+)$/);
+  const track = m ? m[1] : '';
+  const langRaw = m ? m[2] : base;
+  const lang = String(langRaw)
+    .trim()
+    .replace(/\s+/g, '_')
+    .replace(/[^a-zA-Z0-9_\-\u4e00-\u9fa5]/g, '')
+    .toLowerCase() || 'sub';
+  return track ? `.${lang}.${track}` : `.${lang}`;
+}
+
 async function collectSidecarSubtitles(entry) {
   const sourceDir = path.dirname(entry.sourcePath);
   const originalBaseName = entry.originalNameNoExt;
   const items = [];
+
   const names = await fs.readdir(sourceDir);
   for (const name of names) {
     const fullPath = path.join(sourceDir, name);
@@ -1004,6 +1021,31 @@ async function collectSidecarSubtitles(entry) {
     if (suffix === null) {
       continue;
     }
+    items.push({ fullPath, ext, suffix });
+  }
+
+  // Handle release packs like Subs/<video-name-no-ext>/*.srt
+  const subsEpisodeDir = path.join(sourceDir, 'Subs', originalBaseName);
+  let subsNames = [];
+  try {
+    subsNames = await fs.readdir(subsEpisodeDir);
+  } catch (err) {
+    if (!err || !['ENOENT', 'ENOTDIR'].includes(err.code)) {
+      throw err;
+    }
+  }
+  for (const name of subsNames) {
+    const fullPath = path.join(subsEpisodeDir, name);
+    const stat = await fs.stat(fullPath);
+    if (!stat.isFile()) {
+      continue;
+    }
+    const ext = path.extname(name).toLowerCase();
+    if (!SUBTITLE_EXTENSIONS.has(ext)) {
+      continue;
+    }
+    const subtitleNoExt = name.slice(0, -ext.length);
+    const suffix = buildSubtitleSuffixFromSubsName(subtitleNoExt);
     items.push({ fullPath, ext, suffix });
   }
   return items;
