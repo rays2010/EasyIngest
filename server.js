@@ -4,6 +4,7 @@ const fsSync = require('fs');
 const fs = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
+const { spawn } = require('child_process');
 const { ProxyAgent, setGlobalDispatcher, Agent } = require('undici');
 
 function looksMojibake(text) {
@@ -112,6 +113,8 @@ const DEFAULT_OUTPUT_DIR = process.env.OUTPUT_HOST_DIR || process.env.OUTPUT_DIR
 const TITLE_LANGUAGE = (process.env.TITLE_LANGUAGE || 'zh').toLowerCase();
 const VIDEO_EXTENSIONS = new Set(['.mp4', '.mkv']);
 const SUBTITLE_EXTENSIONS = new Set(['.srt', '.ass', '.ssa', '.sub', '.vtt']);
+const ARCHIVE_EXTENSIONS = ['.zip', '.rar', '.7z', '.tar', '.tar.gz', '.tgz', '.tar.xz', '.txz'];
+const SUB_ARCHIVE_TMP_DIR = '.easyingest_subs';
 const TV_TYPES = new Set(['tv', 'anime', 'show']);
 const TYPE_TO_DIR = {
   movie: '电影',
@@ -124,6 +127,7 @@ const AI_CIRCUIT_BREAK_MS = Number(process.env.AI_CIRCUIT_BREAK_MS || 15000);
 const SCAN_CONCURRENCY = Number(process.env.SCAN_CONCURRENCY || 4);
 const APPLY_PROGRESS_SAVE_INTERVAL_MS = Number(process.env.APPLY_PROGRESS_SAVE_INTERVAL_MS || 400);
 let aiCircuitOpenUntil = 0;
+const archiveExtractCache = new Map();
 
 app.use(express.json({ limit: '5mb' }));
 app.use(express.static(path.join(WORK_DIR, 'public')));
@@ -1014,6 +1018,128 @@ async function ensureParentDir(filePath) {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
 }
 
+function getArchiveExt(name) {
+  const lower = String(name || '').toLowerCase();
+  const matched = ARCHIVE_EXTENSIONS.find((ext) => lower.endsWith(ext));
+  return matched || '';
+}
+
+async function runCommand(command, args, cwd) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd,
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+    let stdout = '';
+    let stderr = '';
+
+    child.stdout.on('data', (buf) => {
+      stdout += String(buf || '');
+    });
+    child.stderr.on('data', (buf) => {
+      stderr += String(buf || '');
+    });
+    child.on('error', (err) => reject(err));
+    child.on('close', (code) => {
+      if (code === 0) {
+        resolve({ stdout, stderr });
+        return;
+      }
+      const err = new Error(`${command} exited with code ${code}: ${stderr || stdout}`);
+      err.code = code;
+      reject(err);
+    });
+  });
+}
+
+async function walkSubtitleFiles(rootDir) {
+  const out = [];
+  const queue = [rootDir];
+  while (queue.length > 0) {
+    const current = queue.pop();
+    let entries = [];
+    try {
+      entries = await fs.readdir(current, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      const full = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        queue.push(full);
+        continue;
+      }
+      if (!entry.isFile()) {
+        continue;
+      }
+      const ext = path.extname(entry.name).toLowerCase();
+      if (SUBTITLE_EXTENSIONS.has(ext)) {
+        out.push(full);
+      }
+    }
+  }
+  return out;
+}
+
+async function extractArchiveToDir(archivePath, targetDir) {
+  const ext = getArchiveExt(path.basename(archivePath));
+  const cwd = path.dirname(archivePath);
+  const candidates = [];
+
+  if (ext === '.zip') {
+    candidates.push({ cmd: 'unzip', args: ['-o', archivePath, '-d', targetDir] });
+    candidates.push({ cmd: '7z', args: ['x', '-y', `-o${targetDir}`, archivePath] });
+  } else if (ext === '.rar') {
+    candidates.push({ cmd: 'unrar', args: ['x', '-o+', archivePath, `${targetDir}${path.sep}`] });
+    candidates.push({ cmd: '7z', args: ['x', '-y', `-o${targetDir}`, archivePath] });
+  } else if (ext === '.7z') {
+    candidates.push({ cmd: '7z', args: ['x', '-y', `-o${targetDir}`, archivePath] });
+  } else {
+    candidates.push({ cmd: 'tar', args: ['-xf', archivePath, '-C', targetDir] });
+    candidates.push({ cmd: '7z', args: ['x', '-y', `-o${targetDir}`, archivePath] });
+  }
+
+  let lastErr = null;
+  for (const c of candidates) {
+    try {
+      await runCommand(c.cmd, c.args, cwd);
+      return true;
+    } catch (err) {
+      lastErr = err;
+      if (err && err.code === 'ENOENT') {
+        continue;
+      }
+      // Some tools exist but fail on format; try next fallback command.
+      continue;
+    }
+  }
+  if (lastErr) {
+    await logLine(`[WARN] archive extract failed ${archivePath}: ${lastErr.message}`);
+  }
+  return false;
+}
+
+function matchExtractedSubtitleSuffix(subPath, rootDir, originalBaseName) {
+  const ext = path.extname(subPath).toLowerCase();
+  if (!SUBTITLE_EXTENSIONS.has(ext)) {
+    return null;
+  }
+
+  const fileNoExt = path.basename(subPath, ext);
+  const exactSuffix = splitSubtitleSuffix(fileNoExt, originalBaseName);
+  if (exactSuffix !== null) {
+    return { ext, suffix: exactSuffix };
+  }
+
+  const rel = path.relative(rootDir, subPath);
+  const relParts = rel.split(path.sep).filter(Boolean);
+  if (relParts.includes(originalBaseName)) {
+    return { ext, suffix: buildSubtitleSuffixFromSubsName(fileNoExt) };
+  }
+
+  return null;
+}
+
 async function moveFileWithFallback(sourcePath, targetPath, onProgress = null) {
   try {
     await fs.rename(sourcePath, targetPath);
@@ -1227,7 +1353,66 @@ async function collectSidecarSubtitles(entry) {
     const suffix = buildSubtitleSuffixFromSubsName(subtitleNoExt);
     items.push({ fullPath, ext, suffix });
   }
-  return items;
+
+  // Handle subtitle archives found near source videos.
+  const archiveKey = sourceDir;
+  let extractedSubtitleItems = archiveExtractCache.get(archiveKey);
+  if (!extractedSubtitleItems) {
+    extractedSubtitleItems = [];
+    let dirNames = [];
+    try {
+      dirNames = await fs.readdir(sourceDir);
+    } catch {
+      dirNames = [];
+    }
+    const archiveNames = dirNames.filter((name) => getArchiveExt(name));
+    for (const name of archiveNames) {
+      const archivePath = path.join(sourceDir, name);
+      const stat = await fs.stat(archivePath).catch(() => null);
+      if (!stat?.isFile()) {
+        continue;
+      }
+      const extractRoot = path.join(
+        sourceDir,
+        SUB_ARCHIVE_TMP_DIR,
+        `${path.basename(name, path.extname(name))}_${crypto.createHash('sha1').update(archivePath).digest('hex').slice(0, 8)}`
+      );
+      await fs.mkdir(extractRoot, { recursive: true });
+      const ok = await extractArchiveToDir(archivePath, extractRoot);
+      if (!ok) {
+        continue;
+      }
+      const subtitles = await walkSubtitleFiles(extractRoot);
+      extractedSubtitleItems.push(
+        ...subtitles.map((subPath) => ({
+          fullPath: subPath,
+          extractRoot
+        }))
+      );
+    }
+    archiveExtractCache.set(archiveKey, extractedSubtitleItems);
+  }
+  for (const sub of extractedSubtitleItems) {
+    const matched = matchExtractedSubtitleSuffix(sub.fullPath, sub.extractRoot, originalBaseName);
+    if (!matched) {
+      continue;
+    }
+    items.push({
+      fullPath: sub.fullPath,
+      ext: matched.ext,
+      suffix: matched.suffix
+    });
+  }
+
+  // Deduplicate by source path + target suffix.
+  const dedup = new Map();
+  for (const item of items) {
+    const key = `${item.fullPath}::${item.suffix}::${item.ext}`;
+    if (!dedup.has(key)) {
+      dedup.set(key, item);
+    }
+  }
+  return [...dedup.values()];
 }
 
 async function moveSidecarSubtitles(entry, videoFinalPath) {

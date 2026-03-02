@@ -178,6 +178,7 @@ NO_PROXY=localhost,127.0.0.1,host.docker.internal
 - 执行移动后会自动删除输入目录下已变空的子文件夹（不会删除输入根目录）
 - 字幕会跟随视频一起移动并改名（支持 `srt/ass/ssa/sub/vtt`）
 - 额外支持 `Subs/<原视频名无扩展>/` 结构的字幕包（如 `Subs/The.Midnight.Gospel.S01E01.../29_Chinese.srt`），会自动搬到对应视频旁并改为同名标准语言代码后缀（如 `*.zh.29.srt`、`*.en.2.srt`），便于 Jellyfin 识别
+- 支持在视频同目录自动识别并解压字幕压缩包（`zip/rar/7z/tar/tar.gz/tgz/tar.xz/txz`），解压后按同样字幕映射规则处理
 - 当输入目录下已不存在任何视频文件时，会自动清理剩余非视频文件（如图片、种子）并删除空子目录
 - 类型目录映射：
   - `movie -> 电影`
