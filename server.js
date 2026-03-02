@@ -291,6 +291,25 @@ function detectEpisodeMeta(normalizedName) {
   return null;
 }
 
+function detectSeasonHint(normalizedName) {
+  const sxeSeason = normalizedName.match(/[Ss](\d{1,2})[Ee]\d{1,3}/);
+  if (sxeSeason) {
+    return Number(sxeSeason[1]);
+  }
+
+  const seasonEn = normalizedName.match(/(?:^|[\s._-])(?:season|s)\s*0?(\d{1,2})(?:[\s._-]|$)/i);
+  if (seasonEn) {
+    return Number(seasonEn[1]);
+  }
+
+  const seasonZh = normalizedName.match(/第\s*0?(\d{1,2})\s*季/);
+  if (seasonZh) {
+    return Number(seasonZh[1]);
+  }
+
+  return null;
+}
+
 const EXCLUDED_SCAN_DIR_KEYWORDS = ['云盘缓存文件', '.drive', '@eaDir', '#recycle', '$recycle.bin'];
 const NORMALIZED_EXCLUDED_SCAN_DIR_KEYWORDS = EXCLUDED_SCAN_DIR_KEYWORDS
   .map((k) => String(k || '').normalize('NFKC').toLowerCase());
@@ -378,6 +397,7 @@ function parseByHeuristic(filename) {
   const normalized = noExt.replace(/[._]/g, ' ');
   const yearMatch = normalized.match(/(?:19|20)\d{2}/);
   const episodeMeta = detectEpisodeMeta(normalized);
+  const seasonHint = detectSeasonHint(normalized);
 
   let type = 'movie';
   if (episodeMeta) {
@@ -404,7 +424,7 @@ function parseByHeuristic(filename) {
     title,
     year: yearMatch ? Number(yearMatch[0]) : null,
     type,
-    season: episodeMeta ? Number(episodeMeta.season) : null,
+    season: episodeMeta ? Number(seasonHint || episodeMeta.season) : null,
     episode: episodeMeta ? Number(episodeMeta.episode) : null,
     confidence: 0.4,
     source: 'cleaner'
@@ -571,7 +591,8 @@ async function parseSeriesGroupByAI(fileNames, cleanedHints, folderHintName, cle
 function buildSeriesGroupKey(heuristic) {
   const baseTitle = cleanName(heuristic.title || '').toLowerCase();
   const year = toSafeInt(heuristic.year) || 0;
-  return `${baseTitle}::${year}`;
+  const season = toSafeInt(heuristic.season) || 1;
+  return `${baseTitle}::${year}::s${season}`;
 }
 
 function hasChinese(text) {
