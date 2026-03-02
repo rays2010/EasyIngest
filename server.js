@@ -200,6 +200,14 @@ function detectEpisodeMeta(normalizedName) {
     return { season: 1, episode: Number(ep[1]), pattern: 'ep' };
   }
 
+  // Fansub-like naming: [Group][Title][01][BIG5]...
+  const bracketNumbers = [...normalizedName.matchAll(/\[(\d{1,3})\]/g)]
+    .map((m) => Number(m[1]))
+    .filter((n) => Number.isFinite(n) && n > 0 && n <= 199);
+  if (bracketNumbers.length > 0) {
+    return { season: 1, episode: bracketNumbers[0], pattern: 'bracket' };
+  }
+
   const pureIndex = normalizedName.trim().match(/^0*(\d{1,3})$/);
   if (pureIndex) {
     const n = Number(pureIndex[1]);
@@ -311,6 +319,8 @@ function parseByHeuristic(filename) {
     titleBase = titleBase.replace(/第\s*\d{1,3}\s*[集话話].*/i, '');
   } else if (episodeMeta?.pattern === 'ep') {
     titleBase = titleBase.replace(/(?:^|[\s._-])(?:ep?|e)\s*\d{1,3}.*/i, '');
+  } else if (episodeMeta?.pattern === 'bracket') {
+    titleBase = titleBase.replace(/\[\d{1,3}\].*/i, '');
   } else if (episodeMeta?.pattern === 'index') {
     titleBase = '';
   }
