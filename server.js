@@ -240,6 +240,9 @@ function cleanName(name) {
 function stripNoiseTokens(text) {
   let t = String(text || '');
 
+  // Normalize full-width wrappers to simplify matching.
+  t = t.replace(/[【]/g, '[').replace(/[】]/g, ']');
+
   // Remove common release wrappers and web/source noise.
   t = t.replace(/\[[^\]]*(?:www|https?|com|net|org|cc|tv|论坛|发布|字幕组|电影|资源)[^\]]*\]/gi, ' ');
   t = t.replace(/\[[^\]]*(?:www\.|https?:\/\/|\.com|\.net|\.org|\.cc|\.tv|最新网址|论坛|字幕组)[^\]]*\]/gi, ' ');
@@ -247,15 +250,22 @@ function stripNoiseTokens(text) {
   t = t.replace(/https?:\/\/\S+/gi, ' ');
   t = t.replace(/www\.[^\s]+/gi, ' ');
   t = t.replace(/\b[A-Za-z0-9-]+\.(?:com|net|org|cc|tv|xyz|top|cn)\b/gi, ' ');
+  t = t.replace(/(?:高清)?剧集网发布|剧集网|资源网|最新网址/gi, ' ');
 
   // Remove resolution/source/codec/audio tags.
   t = t.replace(/\b(?:2160p|1080p|720p|480p|4k|8k)\b/gi, ' ');
   t = t.replace(/\b(?:blu[\s-]?ray|bdrip|webrip|web[\s-]?dl|hdrip|dvdrip|remux)\b/gi, ' ');
   t = t.replace(/\b(?:x264|x265|h264|h265|hevc|avc|10bit|8bit)\b/gi, ' ');
-  t = t.replace(/\b(?:aac(?:2\.0)?|ddp?\d(?:\.\d)?|atmos|dts(?:-hd)?)\b/gi, ' ');
+  t = t.replace(/\b(?:aac(?:2\.0)?|ddp?\d(?:\.\d)?|atmos|dts(?:-hd)?|iq|blacktv)\b/gi, ' ');
+
+  // Remove season-pack and subtitle/audio descriptors.
+  t = t.replace(/(?:全\s*\d{1,3}\s*[集话話]|完结|完結|全季|全一季|全\d{1,2}季)/gi, ' ');
+  t = t.replace(/(?:国语音轨|粤语音轨|国配|粤配|简繁英字幕|简繁字幕|中英字幕|双语字幕|多语字幕)/gi, ' ');
 
   // Remove frequent Chinese junk words.
   t = t.replace(/(?:中文字幕|中字|双字|原创|原创字幕|高清|超清|蓝光|未删减|完整版|内封|官中|特效字幕)/g, ' ');
+  t = t.replace(/\[[\s+\-]*\]/g, ' ');
+  t = t.replace(/(?:^|[\s])[-+](?=$|[\s])/g, ' ');
 
   return cleanName(t.replace(/[._]/g, ' '));
 }
@@ -414,9 +424,10 @@ function parseByHeuristic(filename) {
   const yearMatch = normalized.match(/(?:19|20)\d{2}/);
   const episodeMeta = detectEpisodeMeta(normalized);
   const seasonHint = detectSeasonHint(normalized);
+  const hasSeasonPackHint = /(?:全\s*\d{1,3}\s*[集话話]|完结|完結|全季|全\d{1,2}季)/i.test(normalized);
 
   let type = 'movie';
-  if (episodeMeta) {
+  if (episodeMeta || seasonHint || hasSeasonPackHint) {
     type = 'tv';
   }
 
@@ -434,6 +445,12 @@ function parseByHeuristic(filename) {
   } else if (episodeMeta?.pattern === 'index') {
     titleBase = '';
   }
+  if (!episodeMeta) {
+    titleBase = titleBase
+      .replace(/(?:^|[\s._\-\[])(?:season|s)\s*0?\d{1,2}(?:[\s._\-\]]|$)/gi, ' ')
+      .replace(/第\s*0?\d{1,2}\s*季/gi, ' ')
+      .replace(/(?:全\s*\d{1,3}\s*[集话話]|完结|完結|全季|全\d{1,2}季)/gi, ' ');
+  }
   titleBase = titleBase.replace(/(?:19|20)\d{2}.*/, '');
   const cleaned = stripNoiseTokens(titleBase);
   const title = cleaned || (episodeMeta ? '' : stripNoiseTokens(noExt));
@@ -442,7 +459,7 @@ function parseByHeuristic(filename) {
     title,
     year: yearMatch ? Number(yearMatch[0]) : null,
     type,
-    season: episodeMeta ? Number(seasonHint || episodeMeta.season) : null,
+    season: (episodeMeta || seasonHint) ? Number(seasonHint || episodeMeta?.season || 1) : null,
     episode: episodeMeta ? Number(episodeMeta.episode) : null,
     confidence: 0.4,
     source: 'cleaner'
