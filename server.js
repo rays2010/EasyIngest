@@ -449,7 +449,14 @@ function parseByHeuristic(filename) {
   };
 }
 
-async function parseByAI({ filename, cleanedTitleHint = '', folderHintName = '', episodeHint = null, yearHint = null }) {
+async function parseByAI({
+  filename,
+  cleanedTitleHint = '',
+  folderHintName = '',
+  episodeHint = null,
+  yearHint = null,
+  standardZhTitleHint = ''
+}) {
   const apiKey = process.env.AI_API_KEY;
   const apiBase = process.env.AI_API_BASE || 'https://api.openai.com/v1';
   const model = process.env.AI_MODEL || 'gpt-4.1-mini';
@@ -462,7 +469,7 @@ async function parseByAI({ filename, cleanedTitleHint = '', folderHintName = '',
     TITLE_LANGUAGE === 'en'
       ? 'title 必须使用英文官方名（不要中文译名）。'
       : 'title 必须使用简体中文常用译名（不要英文名）。';
-  const prompt = `你是影视文件识别器。根据“清洗后的标题提示 + 原始文件名 + 目录提示”输出严格 JSON，不要输出任何额外文字。\n字段：title(string),year(number|null),type(movie|tv|anime|show),season(number|null),episode(number|null),confidence(0-1)。\n额外规则：${languageRule}\n类型规则：只要作品是动画内容（包含日漫、欧美动画、动画剧集、cartoon、animated series），type 必须返回 anime，不要返回 tv。\n要求：优先基于清洗后的标题提示识别真实作品；忽略网址、分辨率、编码、字幕、原创等噪声。\n清洗后的标题提示：${cleanedTitleHint || ''}\n目录提示：${folderHintName || ''}\n原始文件名：${filename}\n集数提示：${episodeHint ? `S${episodeHint.season}E${episodeHint.episode}` : ''}\n年份提示：${yearHint || ''}`;
+  const prompt = `你是影视文件识别器。根据“清洗后的标题提示 + 原始文件名 + 目录提示”输出严格 JSON，不要输出任何额外文字。\n字段：title(string),year(number|null),type(movie|tv|anime|show),season(number|null),episode(number|null),confidence(0-1)。\n额外规则：${languageRule}\n类型规则：只要作品是动画内容（包含日漫、欧美动画、动画剧集、cartoon、animated series），type 必须返回 anime，不要返回 tv。\n要求：优先基于清洗后的标题提示识别真实作品；忽略网址、分辨率、编码、字幕、原创等噪声。\n若“标准中文名提示”非空，优先使用该名称进行识别与消歧。\n标准中文名提示：${standardZhTitleHint || ''}\n清洗后的标题提示：${cleanedTitleHint || ''}\n目录提示：${folderHintName || ''}\n原始文件名：${filename}\n集数提示：${episodeHint ? `S${episodeHint.season}E${episodeHint.episode}` : ''}\n年份提示：${yearHint || ''}`;
 
   try {
     const resp = await fetchWithTimeout(`${apiBase}/chat/completions`, {
@@ -494,7 +501,7 @@ async function parseByAI({ filename, cleanedTitleHint = '', folderHintName = '',
       : 'movie';
 
     return {
-      title: cleanName(parsed.title || cleanedTitleHint || filename.replace(/\.[^.]+$/, '')),
+      title: cleanName(parsed.title || standardZhTitleHint || cleanedTitleHint || filename.replace(/\.[^.]+$/, '')),
       year: toSafeInt(parsed.year),
       type,
       season: toSafeInt(parsed.season),
@@ -535,7 +542,7 @@ function detectSeriesHintName(filePath, inputDir) {
   return parts[0] || path.basename(parentAbs);
 }
 
-async function parseSeriesGroupByAI(fileNames, cleanedHints, folderHintName, cleanedFolderHint, fallback) {
+async function parseSeriesGroupByAI(fileNames, cleanedHints, folderHintName, cleanedFolderHint, fallback, standardZhTitleHint = '') {
   const apiKey = process.env.AI_API_KEY;
   const apiBase = process.env.AI_API_BASE || 'https://api.openai.com/v1';
   const model = process.env.AI_MODEL || 'gpt-4.1-mini';
@@ -556,7 +563,7 @@ async function parseSeriesGroupByAI(fileNames, cleanedHints, folderHintName, cle
       ? 'title 必须使用英文官方名（不要中文译名）。'
       : 'title 必须使用简体中文常用译名（不要英文名）。';
 
-  const prompt = `你是剧集文件名识别器。下面这些文件来自同一部剧集，请输出统一信息。\n输出严格 JSON，不要输出任何额外文字。\n字段：title(string),year(number|null),type(tv|anime|show),confidence(0-1)。\n额外规则：${languageRule}\n类型规则：只要该剧是动画内容（包含日漫、欧美动画、cartoon、animated series），type 必须返回 anime，不要返回 tv。\n识别优先级：优先依据“清洗后的目录提示”，文件名仅作辅助。\n清洗后的目录提示：${cleanedFolderHint || ''}\n原始剧集目录名：${folderHintName}\n清洗后的文件提示列表：${cleanedHints.join(' | ')}\n原始文件名列表：${fileNames.join(' | ')}`;
+  const prompt = `你是剧集文件名识别器。下面这些文件来自同一部剧集，请输出统一信息。\n输出严格 JSON，不要输出任何额外文字。\n字段：title(string),year(number|null),type(tv|anime|show),confidence(0-1)。\n额外规则：${languageRule}\n类型规则：只要该剧是动画内容（包含日漫、欧美动画、cartoon、animated series），type 必须返回 anime，不要返回 tv。\n识别优先级：优先依据“标准中文名提示”和“清洗后的目录提示”，文件名仅作辅助。\n标准中文名提示：${standardZhTitleHint || ''}\n清洗后的目录提示：${cleanedFolderHint || ''}\n原始剧集目录名：${folderHintName}\n清洗后的文件提示列表：${cleanedHints.join(' | ')}\n原始文件名列表：${fileNames.join(' | ')}`;
 
   try {
     const resp = await fetchWithTimeout(`${apiBase}/chat/completions`, {
@@ -585,7 +592,7 @@ async function parseSeriesGroupByAI(fileNames, cleanedHints, folderHintName, cle
     const type = ['tv', 'anime', 'show'].includes(parsed.type) ? parsed.type : 'tv';
 
     return {
-      title: cleanName(parsed.title || fallback.title),
+      title: cleanName(parsed.title || standardZhTitleHint || fallback.title),
       year: toSafeInt(parsed.year),
       type,
       confidence: Number.isFinite(parsed.confidence) ? parsed.confidence : 0.7,
@@ -958,14 +965,35 @@ async function createTask({ inputDir, outputDir, taskId = crypto.randomUUID(), o
     await pushProgress();
     const fallback = groupItems[0].seriesHintHeuristic;
     const folderHintName = groupItems[0].seriesHintName;
+    const groupEnglishRefTitle = TITLE_LANGUAGE === 'zh'
+      ? extractEnglishTitleCandidate(
+          fallback.title,
+          folderHintName,
+          groupItems[0].heuristic.title,
+          groupItems[0].basename
+        )
+      : '';
+    const groupStandardZhTitle = (TITLE_LANGUAGE === 'zh' && groupEnglishRefTitle)
+      ? (await resolveChineseTitle(groupEnglishRefTitle, {
+          typeHint: fallback.type || 'tv',
+          yearHint: fallback.year,
+          folderHint: folderHintName,
+          cleanedFolderHint: fallback.title,
+          fileNameHint: groupItems[0].basename,
+          cleanedFileHint: groupItems[0].heuristic.title,
+          seasonHint: groupItems[0].heuristic.season,
+          episodeHint: groupItems[0].heuristic.episode
+        })) || ''
+      : '';
     const cleanedHints = groupItems.map((g) => g.heuristic.title || '').filter(Boolean);
-    const cleanedFolderHint = fallback.title || '';
+    const cleanedFolderHint = groupStandardZhTitle || fallback.title || '';
     const aiGroup = await parseSeriesGroupByAI(
       groupItems.map((g) => g.basename),
       cleanedHints,
       folderHintName,
       cleanedFolderHint,
-      fallback
+      fallback,
+      groupStandardZhTitle
     );
     if (aiGroup.aiTimedOut) {
       task.aiTimeoutCount += 1;
@@ -979,16 +1007,37 @@ async function createTask({ inputDir, outputDir, taskId = crypto.randomUUID(), o
 
     const groupKey = buildSeriesGroupKey(item.seriesHintHeuristic);
     const groupMeta = seriesGroupMeta.get(groupKey);
+    const englishRefTitle = TITLE_LANGUAGE === 'zh'
+      ? extractEnglishTitleCandidate(
+          item.seriesHintHeuristic.title,
+          item.heuristic.title,
+          item.seriesHintName,
+          item.basename
+        )
+      : '';
+    const standardZhTitle = (TITLE_LANGUAGE === 'zh' && englishRefTitle)
+      ? (await resolveChineseTitle(englishRefTitle, {
+          typeHint: groupMeta?.type || 'anime',
+          yearHint: groupMeta?.year || item.heuristic.year,
+          folderHint: item.seriesHintName,
+          cleanedFolderHint: item.seriesHintHeuristic.title,
+          fileNameHint: item.basename,
+          cleanedFileHint: item.heuristic.title,
+          seasonHint: item.heuristic.season || groupMeta?.season,
+          episodeHint: item.heuristic.episode || groupMeta?.episode
+        })) || ''
+      : '';
     const aiSingle = groupMeta
       ? null
       : await parseByAI({
           filename: item.basename,
-          cleanedTitleHint: item.heuristic.title,
+          cleanedTitleHint: standardZhTitle || item.heuristic.title,
           folderHintName: item.seriesHintName,
           episodeHint: item.heuristic.season && item.heuristic.episode
             ? { season: item.heuristic.season, episode: item.heuristic.episode }
             : null,
-          yearHint: item.heuristic.year
+          yearHint: item.heuristic.year,
+          standardZhTitleHint: standardZhTitle
         });
     if (aiSingle?.aiTimedOut) {
       task.aiTimeoutCount += 1;
@@ -1021,16 +1070,10 @@ async function createTask({ inputDir, outputDir, taskId = crypto.randomUUID(), o
     }
 
     if (TITLE_LANGUAGE === 'zh') {
-      const englishRefTitle = looksEnglishTitle(ai.title)
-        ? ai.title
-        : extractEnglishTitleCandidate(
-            item.seriesHintHeuristic.title,
-            item.heuristic.title,
-            item.seriesHintName,
-            item.basename
-          );
-      if (englishRefTitle) {
-        const zhTitle = await resolveChineseTitle(englishRefTitle, {
+      if (standardZhTitle) {
+        ai.title = standardZhTitle;
+      } else if (looksEnglishTitle(ai.title)) {
+        const zhTitle = await resolveChineseTitle(ai.title, {
           typeHint: ai.type,
           yearHint: ai.year,
           folderHint: item.seriesHintName,
