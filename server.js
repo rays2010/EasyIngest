@@ -717,7 +717,7 @@ async function inferYearFromTitleByAI(title, typeHint = 'movie') {
 async function inferChineseTitleByAI(title, context = {}) {
   const apiKey = process.env.AI_API_KEY;
   const apiBase = process.env.AI_API_BASE || 'https://api.openai.com/v1';
-  const model = process.env.AI_MODEL || 'gpt-4.1-mini';
+  const model = process.env.AI_TITLE_MODEL || process.env.AI_MODEL || 'gpt-4.1';
   const cleanTitle = cleanName(title || '');
   const safeTypeHint = ['movie', 'tv', 'anime', 'show'].includes(context.typeHint) ? context.typeHint : 'movie';
   const safeYearHint = toSafeInt(context.yearHint);
@@ -732,7 +732,7 @@ async function inferChineseTitleByAI(title, context = {}) {
     return null;
   }
 
-  const prompt = `你是影视标题标准化助手。请根据“英文标题 + 上下文线索”返回该影视作品最常用的简体中文名称。\n输出严格 JSON，不要输出额外文字。\n字段：title(string|null), confidence(0-1)。\n约束：\n1) 仅返回简体中文片名/剧名，不带年份、季号、分辨率、地区等附加信息。\n2) 必须先进行重名消歧：优先匹配与类型、年份、目录线索、季集线索一致的条目。\n3) 若置信度不足或无法明确唯一条目，title 返回 null。\n英文标题：${cleanTitle}\n类型线索：${safeTypeHint}\n年份线索：${safeYearHint || ''}\n目录名线索：${safeFolderHint}\n目录清洗线索：${safeCleanedFolderHint}\n文件名线索：${safeFileNameHint}\n文件清洗线索：${safeCleanedFileHint}\n季号线索：${safeSeasonHint || ''}\n集号线索：${safeEpisodeHint || ''}`;
+  const prompt = `你是影视标题标准化助手。请根据“英文标题 + 上下文线索”返回该影视作品最常用的简体中文名称。\n输出严格 JSON，不要输出额外文字。\n字段：title(string|null), confidence(0-1), isLiteralTranslation(boolean)。\n约束：\n1) 仅返回简体中文片名/剧名，不带年份、季号、分辨率、地区等附加信息。\n2) 必须先进行重名消歧：优先匹配与类型、年份、目录线索、季集线索一致的条目。\n3) 禁止按英文单词做字面直译（例如“跳过/摸鱼/洛弗/乐福鞋”这类词面翻译）；若只能得到直译，返回 null。\n4) 对动画作品优先采用中文社区常用正式译名（如豆瓣/Bangumi/B站等常见条目）。\n5) 若置信度不足或无法明确唯一条目，title 返回 null。\n英文标题：${cleanTitle}\n类型线索：${safeTypeHint}\n年份线索：${safeYearHint || ''}\n目录名线索：${safeFolderHint}\n目录清洗线索：${safeCleanedFolderHint}\n文件名线索：${safeFileNameHint}\n文件清洗线索：${safeCleanedFileHint}\n季号线索：${safeSeasonHint || ''}\n集号线索：${safeEpisodeHint || ''}`;
 
   try {
     const resp = await fetchWithTimeout(`${apiBase}/chat/completions`, {
@@ -760,13 +760,56 @@ async function inferChineseTitleByAI(title, context = {}) {
     const parsed = JSON.parse(text);
     const confidence = Number(parsed.confidence);
     const zhTitle = cleanName(parsed.title || '');
+    const isLiteralTranslation = parsed.isLiteralTranslation === true;
     if (!zhTitle || !hasChinese(zhTitle)) {
+      return null;
+    }
+    if (isLiteralTranslation) {
       return null;
     }
     if (Number.isFinite(confidence) && confidence < 0.7) {
       return null;
     }
-    return zhTitle;
+
+    const verifyPrompt = `你是影视中文译名审核器。请判断“候选中文名”是否是该作品在中文语境下的常用正式译名，而非英文词面直译。\n输出严格 JSON：{"ok":boolean,"title":string|null,"confidence":number}。\n规则：\n1) 如果候选名不准确或偏直译，ok=false，并给出更准确的 title（若无法确定则 null）。\n2) 如果候选名准确，ok=true，title 返回候选名或同义常用名。\n英文标题：${cleanTitle}\n候选中文名：${zhTitle}\n类型线索：${safeTypeHint}\n年份线索：${safeYearHint || ''}\n目录名线索：${safeFolderHint}\n文件名线索：${safeFileNameHint}`;
+
+    const verifyResp = await fetchWithTimeout(`${apiBase}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model,
+        temperature: 0,
+        messages: [
+          { role: 'system', content: '返回 JSON 对象，不要 markdown。' },
+          { role: 'user', content: verifyPrompt }
+        ]
+      })
+    });
+    if (!verifyResp.ok) {
+      throw new Error(`AI HTTP ${verifyResp.status}`);
+    }
+    const verifyData = await verifyResp.json();
+    const verifyText = verifyData?.choices?.[0]?.message?.content || '{}';
+    const verifyParsed = JSON.parse(verifyText);
+    const verifyTitle = cleanName(verifyParsed.title || '');
+    const verifyConfidence = Number(verifyParsed.confidence);
+    const verifyOk = verifyParsed.ok === true;
+    if (!verifyOk) {
+      if (verifyTitle && hasChinese(verifyTitle) && (!Number.isFinite(verifyConfidence) || verifyConfidence >= 0.75)) {
+        return verifyTitle;
+      }
+      return null;
+    }
+    if (!verifyTitle || !hasChinese(verifyTitle)) {
+      return zhTitle;
+    }
+    if (Number.isFinite(verifyConfidence) && verifyConfidence < 0.75) {
+      return null;
+    }
+    return verifyTitle;
   } catch (err) {
     openAICircuit();
     await logLine(`[WARN] infer chinese title fallback for ${cleanTitle}: ${err.message}`);
