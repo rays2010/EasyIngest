@@ -731,6 +731,63 @@ async function inferYearFromTitleByAI(title, typeHint = 'movie') {
   }
 }
 
+async function inferMetaFromTitleByAI(title, context = {}) {
+  const apiKey = process.env.AI_API_KEY;
+  const apiBase = process.env.AI_API_BASE || 'https://api.openai.com/v1';
+  const model = process.env.AI_META_MODEL || process.env.AI_MODEL || 'gpt-4.1';
+  const cleanTitle = cleanName(title || '');
+  const safeTypeHint = ['movie', 'tv', 'anime', 'show'].includes(context.typeHint) ? context.typeHint : 'tv';
+  const safeYearHint = toSafeInt(context.yearHint);
+  const safeFolderHint = cleanName(context.folderHint || '');
+  const safeFileNameHint = cleanName(context.fileNameHint || '');
+  const safeSeasonHint = toSafeInt(context.seasonHint);
+  const safeEpisodeHint = toSafeInt(context.episodeHint);
+  const safeEnglishTitle = cleanName(context.englishTitle || '');
+
+  if (!apiKey || !cleanTitle) {
+    return { year: null, type: null };
+  }
+
+  const prompt = `你是影视元数据校准器。根据标题和上下文，返回最可能的首映年份与类型。\n输出严格 JSON，不要额外文字。\n字段：year(number|null), type(movie|tv|anime|show|null), confidence(0-1)。\n规则：\n1) 如果是动画作品（含日漫、欧美动画、动画剧集），type 必须是 anime，不得返回 tv。\n2) 若信息不足，返回 null，不要猜测。\n3) 同名消歧时优先匹配目录/文件线索与季集线索。\n中文标题：${cleanTitle}\n英文标题线索：${safeEnglishTitle}\n类型线索：${safeTypeHint}\n年份线索：${safeYearHint || ''}\n目录线索：${safeFolderHint}\n文件线索：${safeFileNameHint}\n季号线索：${safeSeasonHint || ''}\n集号线索：${safeEpisodeHint || ''}`;
+
+  try {
+    const resp = await fetchWithTimeout(`${apiBase}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model,
+        temperature: 0,
+        messages: [
+          { role: 'system', content: '返回 JSON 对象，不要 markdown。' },
+          { role: 'user', content: prompt }
+        ]
+      })
+    });
+
+    if (!resp.ok) {
+      throw new Error(`AI HTTP ${resp.status}`);
+    }
+
+    const data = await resp.json();
+    const text = data?.choices?.[0]?.message?.content || '{}';
+    const parsed = JSON.parse(text);
+    const confidence = Number(parsed.confidence);
+    const year = toSafeInt(parsed.year);
+    const type = ['movie', 'tv', 'anime', 'show'].includes(parsed.type) ? parsed.type : null;
+    if (Number.isFinite(confidence) && confidence < 0.72) {
+      return { year: null, type: null };
+    }
+    return { year, type };
+  } catch (err) {
+    openAICircuit();
+    await logLine(`[WARN] infer meta fallback for ${cleanTitle}: ${err.message}`);
+    return { year: null, type: null };
+  }
+}
+
 async function inferChineseTitleByAI(title, context = {}) {
   const apiKey = process.env.AI_API_KEY;
   const apiBase = process.env.AI_API_BASE || 'https://api.openai.com/v1';
@@ -990,6 +1047,7 @@ async function createTask({ inputDir, outputDir, taskId = crypto.randomUUID(), o
   const seriesGroupMeta = new Map();
   const yearByTitleCache = new Map();
   const zhTitleCache = new Map();
+  const metaByTitleCache = new Map();
 
   async function resolveYearByTitle(title, typeHint) {
     const k = `${cleanName(title || '').toLowerCase()}::${typeHint || ''}`;
@@ -1014,6 +1072,22 @@ async function createTask({ inputDir, outputDir, taskId = crypto.randomUUID(), o
     }
     const p = inferChineseTitleByAI(title, context);
     zhTitleCache.set(k, p);
+    return p;
+  }
+
+  async function resolveMetaByTitle(title, context = {}) {
+    const k = [
+      cleanName(title || '').toLowerCase(),
+      cleanName(context.englishTitle || '').toLowerCase(),
+      context.typeHint || '',
+      toSafeInt(context.yearHint) || 0,
+      cleanName(context.folderHint || '').toLowerCase()
+    ].join('::');
+    if (metaByTitleCache.has(k)) {
+      return metaByTitleCache.get(k);
+    }
+    const p = inferMetaFromTitleByAI(title, context);
+    metaByTitleCache.set(k, p);
     return p;
   }
 
@@ -1146,6 +1220,26 @@ async function createTask({ inputDir, outputDir, taskId = crypto.randomUUID(), o
         if (zhTitle) {
           ai.title = zhTitle;
         }
+      }
+    }
+
+    if (TITLE_LANGUAGE === 'zh' && hasChinese(ai.title)) {
+      const normalizedMeta = await resolveMetaByTitle(ai.title, {
+        englishTitle: englishRefTitle,
+        typeHint: ai.type,
+        yearHint: ai.year,
+        folderHint: item.seriesHintName,
+        fileNameHint: item.basename,
+        seasonHint: ai.season,
+        episodeHint: ai.episode
+      });
+      if (!ai.year && normalizedMeta.year) {
+        ai.year = normalizedMeta.year;
+      }
+      if (normalizedMeta.type === 'anime') {
+        ai.type = 'anime';
+      } else if (!ai.type && normalizedMeta.type) {
+        ai.type = normalizedMeta.type;
       }
     }
 
