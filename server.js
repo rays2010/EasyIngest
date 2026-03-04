@@ -686,6 +686,93 @@ function hasTitleWithoutYear(meta) {
   return Boolean(meta && cleanName(meta.title || '') && !toSafeInt(meta.year));
 }
 
+function extractChineseOnlyTitle(text) {
+  const raw = cleanName(String(text || ''));
+  if (!raw || !hasChinese(raw)) {
+    return '';
+  }
+  const keep = raw
+    .replace(/[A-Za-z0-9][A-Za-z0-9 '&:.\-]*/g, ' ')
+    .replace(/\b(?:season|s)\s*\d{1,2}\b/gi, ' ')
+    .replace(/\b(?:ep?|e)\s*\d{1,3}\b/gi, ' ')
+    .replace(/(?:第\s*\d{1,3}\s*[集话話]|第\s*\d{1,2}\s*季)/gi, ' ');
+  return cleanName(keep);
+}
+
+function normalizeTitleForCompare(text) {
+  return cleanName(String(text || ''))
+    .toLowerCase()
+    .replace(/[^a-z0-9\u4e00-\u9fff]+/g, '');
+}
+
+function getTypeHintForMetadata(typeHint) {
+  if (typeHint === 'movie') return 'movie';
+  if (typeHint === 'tv' || typeHint === 'anime' || typeHint === 'show') return 'tv';
+  return 'multi';
+}
+
+async function inferChineseTitleByMetadata(title, context = {}) {
+  const apiKey = process.env.TMDB_API_KEY || '';
+  const apiBase = (process.env.TMDB_API_BASE || 'https://api.themoviedb.org/3').replace(/\/$/, '');
+  const cleanTitle = cleanName(title || '');
+  if (!apiKey || !cleanTitle || hasChinese(cleanTitle)) {
+    return null;
+  }
+
+  const typeHint = ['movie', 'tv', 'anime', 'show'].includes(context.typeHint) ? context.typeHint : 'tv';
+  const yearHint = toSafeInt(context.yearHint);
+  const titleNorm = normalizeTitleForCompare(cleanTitle);
+  const mediaTypeParam = getTypeHintForMetadata(typeHint);
+
+  const url = new URL(`${apiBase}/search/${mediaTypeParam}`);
+  url.searchParams.set('api_key', apiKey);
+  url.searchParams.set('query', cleanTitle);
+  url.searchParams.set('language', 'zh-CN');
+  url.searchParams.set('include_adult', 'false');
+  url.searchParams.set('page', '1');
+
+  try {
+    const resp = await fetchWithTimeout(url.toString(), { method: 'GET' });
+    if (!resp.ok) {
+      throw new Error(`TMDB HTTP ${resp.status}`);
+    }
+    const data = await resp.json();
+    const results = Array.isArray(data?.results) ? data.results : [];
+    if (results.length === 0) {
+      return null;
+    }
+
+    const scored = results
+      .map((r) => {
+        const zhName = cleanName(r?.name || r?.title || '');
+        const origName = cleanName(r?.original_name || r?.original_title || '');
+        const mediaType = r?.media_type || (mediaTypeParam === 'multi' ? '' : mediaTypeParam);
+        const releaseDate = cleanName(r?.first_air_date || r?.release_date || '');
+        const releaseYear = toSafeInt(String(releaseDate).slice(0, 4));
+        const genreIds = Array.isArray(r?.genre_ids) ? r.genre_ids : [];
+        let score = 0;
+        if (zhName && hasChinese(zhName)) score += 3;
+        const origNorm = normalizeTitleForCompare(origName);
+        if (origNorm && (origNorm.includes(titleNorm) || titleNorm.includes(origNorm))) score += 4;
+        if (typeHint === 'movie' && mediaType === 'movie') score += 2;
+        if ((typeHint === 'tv' || typeHint === 'show' || typeHint === 'anime') && mediaType === 'tv') score += 2;
+        if (yearHint && releaseYear && Math.abs(yearHint - releaseYear) <= 1) score += 1;
+        if (typeHint === 'anime' && genreIds.includes(16)) score += 2;
+        return { zhName, score };
+      })
+      .sort((a, b) => b.score - a.score);
+
+    const best = scored[0];
+    if (!best || best.score < 4 || !best.zhName || !hasChinese(best.zhName)) {
+      return null;
+    }
+    return best.zhName;
+  } catch (err) {
+    await logLine(`[WARN] metadata zh title fallback for ${cleanTitle}: ${err.message}`);
+    return null;
+  }
+}
+
 async function inferYearFromTitleByAI(title, typeHint = 'movie') {
   const apiKey = process.env.AI_API_KEY;
   const apiBase = process.env.AI_API_BASE || 'https://api.openai.com/v1';
@@ -1031,217 +1118,67 @@ async function createTask({ inputDir, outputDir, taskId = crypto.randomUUID(), o
   });
   task.scanTotal = preItems.length;
   await pushProgress();
+  const metadataZhTitleCache = new Map();
 
-  const seriesGroups = new Map();
-  for (const item of preItems) {
-    if (!item.heuristic.season || !item.heuristic.episode) {
-      continue;
-    }
-    const key = buildSeriesGroupKey(item.seriesHintHeuristic);
-    if (!seriesGroups.has(key)) {
-      seriesGroups.set(key, []);
-    }
-    seriesGroups.get(key).push(item);
-  }
-
-  const seriesGroupMeta = new Map();
-  const yearByTitleCache = new Map();
-  const zhTitleCache = new Map();
-  const metaByTitleCache = new Map();
-
-  async function resolveYearByTitle(title, typeHint) {
-    const k = `${cleanName(title || '').toLowerCase()}::${typeHint || ''}`;
-    if (yearByTitleCache.has(k)) {
-      return yearByTitleCache.get(k);
-    }
-    const p = inferYearFromTitleByAI(title, typeHint);
-    yearByTitleCache.set(k, p);
-    return p;
-  }
-
-  async function resolveChineseTitle(title, context = {}) {
+  async function resolveMetadataZhTitle(englishTitle, context = {}) {
     const k = [
-      cleanName(title || '').toLowerCase(),
+      cleanName(englishTitle || '').toLowerCase(),
       context.typeHint || '',
-      toSafeInt(context.yearHint) || 0,
-      cleanName(context.folderHint || '').toLowerCase(),
-      cleanName(context.cleanedFolderHint || '').toLowerCase()
+      toSafeInt(context.yearHint) || 0
     ].join('::');
-    if (zhTitleCache.has(k)) {
-      return zhTitleCache.get(k);
+    if (metadataZhTitleCache.has(k)) {
+      return metadataZhTitleCache.get(k);
     }
-    const p = inferChineseTitleByAI(title, context);
-    zhTitleCache.set(k, p);
+    const p = inferChineseTitleByMetadata(englishTitle, context);
+    metadataZhTitleCache.set(k, p);
     return p;
-  }
-
-  async function resolveMetaByTitle(title, context = {}) {
-    const k = [
-      cleanName(title || '').toLowerCase(),
-      cleanName(context.englishTitle || '').toLowerCase(),
-      context.typeHint || '',
-      toSafeInt(context.yearHint) || 0,
-      cleanName(context.folderHint || '').toLowerCase()
-    ].join('::');
-    if (metaByTitleCache.has(k)) {
-      return metaByTitleCache.get(k);
-    }
-    const p = inferMetaFromTitleByAI(title, context);
-    metaByTitleCache.set(k, p);
-    return p;
-  }
-
-  for (const [key, groupItems] of [...seriesGroups.entries()]) {
-    if (groupItems.length < 2) {
-      continue;
-    }
-    task.currentFile = `分组识别：${groupItems[0].seriesHintName || groupItems[0].basename}`;
-    await pushProgress();
-    const fallback = groupItems[0].seriesHintHeuristic;
-    const folderHintName = groupItems[0].seriesHintName;
-    const groupEnglishRefTitle = TITLE_LANGUAGE === 'zh'
-      ? extractEnglishTitleCandidate(
-          fallback.title,
-          folderHintName,
-          groupItems[0].heuristic.title,
-          groupItems[0].basename
-        )
-      : '';
-    const groupStandardZhTitle = (TITLE_LANGUAGE === 'zh' && groupEnglishRefTitle)
-      ? (await resolveChineseTitle(groupEnglishRefTitle, {
-          typeHint: fallback.type || 'tv',
-          yearHint: fallback.year,
-          folderHint: folderHintName,
-          cleanedFolderHint: fallback.title,
-          fileNameHint: groupItems[0].basename,
-          cleanedFileHint: groupItems[0].heuristic.title,
-          seasonHint: groupItems[0].heuristic.season,
-          episodeHint: groupItems[0].heuristic.episode
-        })) || ''
-      : '';
-    const cleanedHints = groupItems.map((g) => g.heuristic.title || '').filter(Boolean);
-    const cleanedFolderHint = groupStandardZhTitle || fallback.title || '';
-    const aiGroup = await parseSeriesGroupByAI(
-      groupItems.map((g) => g.basename),
-      cleanedHints,
-      folderHintName,
-      cleanedFolderHint,
-      fallback,
-      groupStandardZhTitle
-    );
-    if (aiGroup.aiTimedOut) {
-      task.aiTimeoutCount += 1;
-    }
-    seriesGroupMeta.set(key, aiGroup);
   }
 
   for (const item of preItems) {
     task.currentFile = item.basename;
     await pushProgress();
-
-    const groupKey = buildSeriesGroupKey(item.seriesHintHeuristic);
-    const groupMeta = seriesGroupMeta.get(groupKey);
-    const englishRefTitle = TITLE_LANGUAGE === 'zh'
-      ? extractEnglishTitleCandidate(
-          item.seriesHintHeuristic.title,
-          item.heuristic.title,
-          item.seriesHintName,
-          item.basename
-        )
-      : '';
-    const standardZhTitle = (TITLE_LANGUAGE === 'zh' && englishRefTitle)
-      ? (await resolveChineseTitle(englishRefTitle, {
-          typeHint: groupMeta?.type || 'anime',
-          yearHint: groupMeta?.year || item.heuristic.year,
-          folderHint: item.seriesHintName,
-          cleanedFolderHint: item.seriesHintHeuristic.title,
-          fileNameHint: item.basename,
-          cleanedFileHint: item.heuristic.title,
-          seasonHint: item.heuristic.season || groupMeta?.season,
-          episodeHint: item.heuristic.episode || groupMeta?.episode
-        })) || ''
-      : '';
-    const aiSingle = groupMeta
-      ? null
-      : await parseByAI({
-          filename: item.basename,
-          cleanedTitleHint: standardZhTitle || item.heuristic.title,
-          folderHintName: item.seriesHintName,
-          episodeHint: item.heuristic.season && item.heuristic.episode
-            ? { season: item.heuristic.season, episode: item.heuristic.episode }
-            : null,
-          yearHint: item.heuristic.year,
-          standardZhTitleHint: standardZhTitle
-        });
-    if (aiSingle?.aiTimedOut) {
-      task.aiTimeoutCount += 1;
-    }
-    const ai = groupMeta
-      ? {
-          title: groupMeta.title || item.seriesHintHeuristic.title || item.heuristic.title || item.originalNameNoExt,
-          year: groupMeta.year || item.heuristic.year || null,
-          type: groupMeta.type,
-          season: item.heuristic.season || groupMeta.season || null,
-          episode: item.heuristic.episode || groupMeta.episode || null,
-          confidence: groupMeta.confidence,
-          source: groupMeta.source
-        }
-      : {
-          title: aiSingle.title || item.heuristic.title || item.originalNameNoExt,
-          year: aiSingle.year || item.heuristic.year || null,
-          type: aiSingle.type,
-          season: item.heuristic.season || aiSingle.season || null,
-          episode: item.heuristic.episode || aiSingle.episode || null,
-          confidence: aiSingle.confidence,
-          source: aiSingle.source
-        };
-
-    if (hasTitleWithoutYear(ai)) {
-      const inferredYear = await resolveYearByTitle(ai.title, ai.type);
-      if (inferredYear) {
-        ai.year = inferredYear;
-      }
-    }
+    const preferredTitleBase = cleanName(
+      item.seriesHintHeuristic.title || item.heuristic.title || item.basename.replace(/\.[^.]+$/, '')
+    );
+    const hasZh = hasChinese(preferredTitleBase);
+    const hasEn = looksEnglishTitle(preferredTitleBase);
+    let normalizedTitle = preferredTitleBase;
+    let source = 'cleaner';
+    const englishOnlyRef = hasEn && !hasZh
+      ? preferredTitleBase
+      : extractEnglishTitleCandidate(item.seriesHintName, item.basename, item.heuristic.title);
 
     if (TITLE_LANGUAGE === 'zh') {
-      if (standardZhTitle) {
-        ai.title = standardZhTitle;
-      } else if (looksEnglishTitle(ai.title)) {
-        const zhTitle = await resolveChineseTitle(ai.title, {
-          typeHint: ai.type,
-          yearHint: ai.year,
-          folderHint: item.seriesHintName,
-          cleanedFolderHint: item.seriesHintHeuristic.title,
-          fileNameHint: item.basename,
-          cleanedFileHint: item.heuristic.title,
-          seasonHint: ai.season,
-          episodeHint: ai.episode
+      if (hasZh && hasEn) {
+        const chineseOnly = extractChineseOnlyTitle(preferredTitleBase);
+        if (chineseOnly) {
+          normalizedTitle = chineseOnly;
+          source = 'cleaner-mixed-zh';
+        }
+      } else if (!hasZh && hasEn) {
+        const zhTitle = await resolveMetadataZhTitle(preferredTitleBase, {
+          typeHint: item.heuristic.type,
+          yearHint: item.heuristic.year,
+          seasonHint: item.heuristic.season,
+          episodeHint: item.heuristic.episode
         });
         if (zhTitle) {
-          ai.title = zhTitle;
+          normalizedTitle = zhTitle;
+          source = 'metadata-zh';
         }
       }
     }
 
-    if (TITLE_LANGUAGE === 'zh' && hasChinese(ai.title)) {
-      const normalizedMeta = await resolveMetaByTitle(ai.title, {
-        englishTitle: englishRefTitle,
-        typeHint: ai.type,
-        yearHint: ai.year,
-        folderHint: item.seriesHintName,
-        fileNameHint: item.basename,
-        seasonHint: ai.season,
-        episodeHint: ai.episode
-      });
-      if (!ai.year && normalizedMeta.year) {
-        ai.year = normalizedMeta.year;
-      }
-      if (normalizedMeta.type === 'anime') {
-        ai.type = 'anime';
-      } else if (!ai.type && normalizedMeta.type) {
-        ai.type = normalizedMeta.type;
-      }
-    }
+    const ai = {
+      title: normalizedTitle || preferredTitleBase || item.basename.replace(/\.[^.]+$/, ''),
+      year: item.heuristic.year || null,
+      type: item.heuristic.type || 'movie',
+      season: item.heuristic.season || null,
+      episode: item.heuristic.episode || null,
+      confidence: 0.6,
+      source,
+      englishRef: englishOnlyRef || null
+    };
 
     const entry = {
       id: crypto.randomUUID(),

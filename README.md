@@ -1,6 +1,6 @@
 # EasyIngest
 
-本地网页工具：扫描视频文件 -> AI 建议命名/分类 -> 人工编辑确认 -> 执行重命名和移动。
+本地网页工具：扫描视频文件 -> 标题清洗/元数据映射 -> 人工编辑确认 -> 执行重命名和移动。
 
 ## 使用方式总览
 
@@ -19,7 +19,7 @@ npm run dev
 
 ## 配置（可选）
 
-不配置 AI 时会使用本地规则识别文件名。
+默认使用本地规则识别文件名；当标题是纯英文时，可用 TMDB 元数据查询对应中文名。
 
 1. 复制模板文件：
 
@@ -33,6 +33,8 @@ cp .env.example .env
 AI_API_KEY=your_key
 AI_API_BASE=https://api.openai.com/v1
 AI_MODEL=gpt-4.1-mini
+TMDB_API_KEY=your_tmdb_key
+TMDB_API_BASE=https://api.themoviedb.org/3
 TITLE_LANGUAGE=zh
 INPUT_DIR=/path/to/input
 OUTPUT_DIR=/path/to/output
@@ -43,6 +45,7 @@ PORT=3000
 也可以继续用命令行 `export` 环境变量覆盖 `.env` 中的值。
 其中 `INPUT_DIR` 和 `OUTPUT_DIR` 配置后，页面会自动回填，扫描时可不手动输入。
 `TITLE_LANGUAGE` 用于统一片名语言：`zh`（中文）或 `en`（英文）。
+`TMDB_API_KEY` 用于“纯英文剧名 -> 中文剧名”的元数据查询（可选）。
 在 Docker 部署下，页面默认会优先显示 `INPUT_HOST_DIR/OUTPUT_HOST_DIR`。
 
 ## NAS 首次部署
@@ -148,7 +151,7 @@ cd /volume3/docker/EasyIngest
 4. 中文路径显示乱码
 从当前版本开始，服务会自动兼容 `.env` 的 UTF-8/GB18030（GBK）编码。若仍异常，建议把 `.env` 改为 UTF-8 后重启容器。
 
-5. NAS 访问 AI 接口不通（走 Clash 代理）
+5. NAS 访问外部元数据接口不通（走 Clash 代理）
 在 `.env` 设置：
 
 ```bash
@@ -164,16 +167,16 @@ NO_PROXY=localhost,127.0.0.1,host.docker.internal
 /usr/local/bin/docker compose up -d --build
 ```
 
-服务端会自动读取上述代理变量，并让 AI 请求通过代理发出。
+服务端会自动读取上述代理变量，并让外部接口请求通过代理发出。
 
 ## 规则
 
 - 电影（单文件）：`片名 (年份).ext`
 - 剧集（多文件）：`剧名/SXX/剧名 - SXXEXX.ext`（剧集目录不带年份）
-- 分类策略：类型（movie/tv/anime/show）统一以 AI 结果为准（AI 不可用时回退本地）
-- 命名策略：本地若已识别出“中文片名 + 年份”，优先沿用本地片名和年份；否则使用 AI 结果
-- 年份补全：当本地已提取到片名但缺少年份时，会用该片名向 AI 追加查询年份并回填
-- AI 调用优化：同一剧集分组只调用一次接口，结果批量应用到各集
+- 分类策略：类型（movie/tv/anime/show）按本地规则识别
+- 命名策略：先做标题清洗；若清洗后同时包含中英文，只保留中文部分
+- 元数据映射：若清洗后仅有英文名，则尝试用 TMDB 查询对应中文名（查询失败则保留英文）
+- 年份策略：沿用文件名中可解析出的年份，不再额外做 AI 年份补全
 - 多集剧集识别时优先使用所在文件夹名称（会自动跳过 `S01/Season 1` 这类季目录）
 - 执行移动后会自动删除输入目录下已变空的子文件夹（不会删除输入根目录）
 - 字幕会跟随视频一起移动并改名（支持 `srt/ass/ssa/sub/vtt`）
