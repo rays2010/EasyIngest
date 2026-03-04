@@ -36,6 +36,19 @@ function rowHtml(entry) {
   const typeOptions = ['movie', 'tv', 'anime', 'show']
     .map((t) => `<option value="${t}" ${entry.edited.type === t ? 'selected' : ''}>${typeLabel[t] || t}</option>`)
     .join('');
+  const maxSeason = Number(entry.maxSeasonHint) || 0;
+  const currentLibrarySeason = Number(entry.edited.librarySeason || entry.edited.season || 1) || 1;
+  const canSelectLibrarySeason = maxSeason >= 2;
+  const seasonOptions = canSelectLibrarySeason
+    ? Array.from({ length: maxSeason }, (_, i) => {
+        const n = i + 1;
+        return `<option value="${n}" ${n === currentLibrarySeason ? 'selected' : ''}>S${String(n).padStart(2, '0')}</option>`;
+      }).join('')
+    : '';
+  const librarySeasonCell = canSelectLibrarySeason
+    ? `<select data-key="librarySeason">${seasonOptions}</select>`
+    : '<span>-</span>';
+  const episodeCell = [entry.episodeSummary || '-', entry.subtitleSummary || '-'].join('<br/>');
 
   return `
     <tr data-id="${entry.id}" data-kind="${entry.kind}" data-entry-ids="${entry.entryIds ? entry.entryIds.join(',') : entry.id}">
@@ -44,7 +57,8 @@ function rowHtml(entry) {
       <td><input data-key="title" value="${entry.edited.title || ''}" /></td>
       <td><input data-key="year" value="${entry.edited.year || ''}" /></td>
       <td><select data-key="type">${typeOptions}</select></td>
-      <td class="subtitle-map">${entry.subtitleSummary || '-'}</td>
+      <td>${librarySeasonCell}</td>
+      <td class="subtitle-map">${episodeCell}</td>
       <td class="path">${entry.target?.fullPath || ''}</td>
     </tr>
   `;
@@ -53,6 +67,35 @@ function rowHtml(entry) {
 function buildSeriesKey(entry) {
   const year = entry.edited.year || '';
   return `${entry.edited.type}::${entry.edited.title || ''}::${year}`;
+}
+
+function detectSeasonFromText(text) {
+  const t = String(text || '');
+  const patterns = [
+    /[Ss](\d{1,2})[Ee]\d{1,3}/i,
+    /(?:^|[\s._\-\[])(?:season|s)\s*0?(\d{1,2})(?:[\s._\-\]]|$)/i,
+    /第\s*0?(\d{1,2})\s*季/i,
+    /(?:^|[\s._\-\[])(\d{1,2})(?:st|nd|rd|th)\s*season(?:[\s._\-\]]|$)/i,
+    /(?:^|[\\/])S(\d{1,2})(?:[\\/]|$)/i
+  ];
+  for (const re of patterns) {
+    const m = t.match(re);
+    if (!m) continue;
+    const n = Number(m[1]);
+    if (Number.isFinite(n) && n >= 1 && n <= 99) {
+      return n;
+    }
+  }
+  return 0;
+}
+
+function inferSeasonUpperBound(entry) {
+  return Math.max(
+    Number(entry?.edited?.season) || 0,
+    Number(entry?.edited?.librarySeason) || 0,
+    detectSeasonFromText(entry?.sourceName),
+    detectSeasonFromText(entry?.target?.fullPath)
+  );
 }
 
 function summarizeEpisodes(entries) {
@@ -146,6 +189,7 @@ function buildDisplayRows(task) {
       rows.push({
         ...e,
         kind: 'single',
+        maxSeasonHint: inferSeasonUpperBound(e),
         episodeSummary: e.edited.season && e.edited.episode ? `S${String(e.edited.season).padStart(2, '0')}E${String(e.edited.episode).padStart(2, '0')}` : '-',
         subtitleSummary: renderSubtitleMeta(subtitleMeta)
       });
@@ -163,12 +207,15 @@ function buildDisplayRows(task) {
       edited: {
         title: first.edited.title,
         year: first.edited.year,
-        type: first.edited.type
+        type: first.edited.type,
+        season: first.edited.season,
+        librarySeason: first.edited.librarySeason
       },
       selected: groupEntries.some((x) => x.selected),
       target: first.target,
       status: aggregateStatus(groupEntries),
       reason: '',
+      maxSeasonHint: Math.max(...groupEntries.map((x) => inferSeasonUpperBound(x)), 0),
       episodeSummary: summarizeEpisodes(groupEntries),
       subtitleSummary: renderSubtitleMeta(subtitleMeta)
     });
@@ -311,7 +358,8 @@ function collectEntriesForUpdate() {
       selected: get('selected').checked,
       title: get('title').value,
       year: get('year').value,
-      type: get('type').value
+      type: get('type').value,
+      librarySeason: get('librarySeason') ? get('librarySeason').value : ''
     };
     const ids = (row.dataset.entryIds || '').split(',').filter(Boolean);
     ids.forEach((id) => {
@@ -321,6 +369,7 @@ function collectEntriesForUpdate() {
         id,
         ...common,
         season: original.edited.season,
+        librarySeason: common.librarySeason || original.edited.librarySeason || original.edited.season,
         episode: original.edited.episode
       });
     });

@@ -317,6 +317,12 @@ function detectSeasonHint(normalizedName) {
     return Number(seasonZh[1]);
   }
 
+  // e.g. "2nd Season", "3rd season"
+  const seasonOrdinal = normalizedName.match(/(?:^|[\s._\-\[])(\d{1,2})(?:st|nd|rd|th)\s*season(?:[\s._\-\]]|$)/i);
+  if (seasonOrdinal) {
+    return Number(seasonOrdinal[1]);
+  }
+
   return null;
 }
 
@@ -671,19 +677,25 @@ async function inferYearFromTitleByAI(title, typeHint = 'movie') {
   }
 }
 
-async function inferChineseTitleByAI(title, typeHint = 'movie', yearHint = null) {
+async function inferChineseTitleByAI(title, context = {}) {
   const apiKey = process.env.AI_API_KEY;
   const apiBase = process.env.AI_API_BASE || 'https://api.openai.com/v1';
   const model = process.env.AI_MODEL || 'gpt-4.1-mini';
   const cleanTitle = cleanName(title || '');
-  const safeTypeHint = ['movie', 'tv', 'anime', 'show'].includes(typeHint) ? typeHint : 'movie';
-  const safeYearHint = toSafeInt(yearHint);
+  const safeTypeHint = ['movie', 'tv', 'anime', 'show'].includes(context.typeHint) ? context.typeHint : 'movie';
+  const safeYearHint = toSafeInt(context.yearHint);
+  const safeFolderHint = cleanName(context.folderHint || '');
+  const safeCleanedFolderHint = cleanName(context.cleanedFolderHint || '');
+  const safeFileNameHint = cleanName(context.fileNameHint || '');
+  const safeCleanedFileHint = cleanName(context.cleanedFileHint || '');
+  const safeSeasonHint = toSafeInt(context.seasonHint);
+  const safeEpisodeHint = toSafeInt(context.episodeHint);
 
   if (!apiKey || !cleanTitle || hasChinese(cleanTitle)) {
     return null;
   }
 
-  const prompt = `你是影视标题标准化助手。请根据给定英文标题，返回该影视作品最常用、最正式的简体中文名称。\n输出严格 JSON，不要输出额外文字。\n字段：title(string|null)。\n约束：\n1) 仅返回简体中文片名/剧名。\n2) 若无法确定，返回 null。\n3) 不要添加年份、季号、分辨率、地区等附加信息。\n标题：${cleanTitle}\n类型：${safeTypeHint}\n年份（可为空）：${safeYearHint || ''}`;
+  const prompt = `你是影视标题标准化助手。请根据“英文标题 + 上下文线索”返回该影视作品最常用的简体中文名称。\n输出严格 JSON，不要输出额外文字。\n字段：title(string|null), confidence(0-1)。\n约束：\n1) 仅返回简体中文片名/剧名，不带年份、季号、分辨率、地区等附加信息。\n2) 必须先进行重名消歧：优先匹配与类型、年份、目录线索、季集线索一致的条目。\n3) 若置信度不足或无法明确唯一条目，title 返回 null。\n英文标题：${cleanTitle}\n类型线索：${safeTypeHint}\n年份线索：${safeYearHint || ''}\n目录名线索：${safeFolderHint}\n目录清洗线索：${safeCleanedFolderHint}\n文件名线索：${safeFileNameHint}\n文件清洗线索：${safeCleanedFileHint}\n季号线索：${safeSeasonHint || ''}\n集号线索：${safeEpisodeHint || ''}`;
 
   try {
     const resp = await fetchWithTimeout(`${apiBase}/chat/completions`, {
@@ -709,8 +721,12 @@ async function inferChineseTitleByAI(title, typeHint = 'movie', yearHint = null)
     const data = await resp.json();
     const text = data?.choices?.[0]?.message?.content || '{}';
     const parsed = JSON.parse(text);
+    const confidence = Number(parsed.confidence);
     const zhTitle = cleanName(parsed.title || '');
     if (!zhTitle || !hasChinese(zhTitle)) {
+      return null;
+    }
+    if (Number.isFinite(confidence) && confidence < 0.7) {
       return null;
     }
     return zhTitle;
@@ -727,6 +743,7 @@ function buildTargetForEntry(entry, groupSize, outputDir) {
   const year = toSafeInt(entry.edited.year);
   const type = ['movie', 'tv', 'anime', 'show'].includes(entry.edited.type) ? entry.edited.type : 'movie';
   const season = toSafeInt(entry.edited.season);
+  const librarySeason = toSafeInt(entry.edited.librarySeason);
   const episode = toSafeInt(entry.edited.episode);
   const yearPart = year ? ` (${year})` : '';
 
@@ -744,7 +761,7 @@ function buildTargetForEntry(entry, groupSize, outputDir) {
     return { categoryDir, fileName, fullPath, mode: 'single' };
   }
 
-  const seasonNum = season || 1;
+  const seasonNum = librarySeason || season || 1;
   const episodeNum = episode || 1;
   const seasonLabel = `S${String(seasonNum).padStart(2, '0')}`;
   const showFolder = `${title}`;
@@ -887,12 +904,18 @@ async function createTask({ inputDir, outputDir, taskId = crypto.randomUUID(), o
     return p;
   }
 
-  async function resolveChineseTitle(title, typeHint, yearHint) {
-    const k = `${cleanName(title || '').toLowerCase()}::${typeHint || ''}::${toSafeInt(yearHint) || 0}`;
+  async function resolveChineseTitle(title, context = {}) {
+    const k = [
+      cleanName(title || '').toLowerCase(),
+      context.typeHint || '',
+      toSafeInt(context.yearHint) || 0,
+      cleanName(context.folderHint || '').toLowerCase(),
+      cleanName(context.cleanedFolderHint || '').toLowerCase()
+    ].join('::');
     if (zhTitleCache.has(k)) {
       return zhTitleCache.get(k);
     }
-    const p = inferChineseTitleByAI(title, typeHint, yearHint);
+    const p = inferChineseTitleByAI(title, context);
     zhTitleCache.set(k, p);
     return p;
   }
@@ -968,7 +991,16 @@ async function createTask({ inputDir, outputDir, taskId = crypto.randomUUID(), o
     }
 
     if (TITLE_LANGUAGE === 'zh' && looksEnglishTitle(ai.title)) {
-      const zhTitle = await resolveChineseTitle(ai.title, ai.type, ai.year);
+      const zhTitle = await resolveChineseTitle(ai.title, {
+        typeHint: ai.type,
+        yearHint: ai.year,
+        folderHint: item.seriesHintName,
+        cleanedFolderHint: item.seriesHintHeuristic.title,
+        fileNameHint: item.basename,
+        cleanedFileHint: item.heuristic.title,
+        seasonHint: ai.season,
+        episodeHint: ai.episode
+      });
       if (zhTitle) {
         ai.title = zhTitle;
       }
@@ -987,6 +1019,7 @@ async function createTask({ inputDir, outputDir, taskId = crypto.randomUUID(), o
         year: ai.year,
         type: ai.type,
         season: ai.season,
+        librarySeason: ai.season,
         episode: ai.episode
       },
       selected: true,
@@ -1460,6 +1493,49 @@ async function cleanupProcessedEntrySourceDirs(entry, movedSubtitles, inputRootD
   }
 }
 
+async function removeVideoContainerFolderIfExists(entry, inputRootDir) {
+  const inputRoot = path.resolve(inputRootDir);
+  const sourceParentDir = path.resolve(path.dirname(entry.sourcePath));
+
+  if (!isWithinDir(sourceParentDir, inputRoot)) {
+    return false;
+  }
+  // Never remove the input root directory itself.
+  if (sourceParentDir === inputRoot) {
+    return false;
+  }
+
+  let stat;
+  try {
+    stat = await fs.stat(sourceParentDir);
+  } catch (err) {
+    if (err && err.code === 'ENOENT') {
+      return false;
+    }
+    throw err;
+  }
+  if (!stat.isDirectory()) {
+    return false;
+  }
+
+  // Keep the container when it still has meaningful media assets:
+  // any subtitle file, or video file larger than 10 MB.
+  const hasProtectedFiles = await hasLargeVideoOrSubtitleFiles(sourceParentDir);
+  if (hasProtectedFiles) {
+    return false;
+  }
+
+  await removeAllFilesAndEmptyDirs(sourceParentDir);
+  try {
+    await fs.rmdir(sourceParentDir);
+  } catch (err) {
+    if (!err || (err.code !== 'ENOENT' && err.code !== 'ENOTEMPTY')) {
+      throw err;
+    }
+  }
+  return true;
+}
+
 async function buildSubtitleMappingsForEntry(entry) {
   if (!entry?.target?.fullPath) {
     return [];
@@ -1540,6 +1616,42 @@ async function hasAnyVideoFiles(rootDir) {
   return false;
 }
 
+async function hasLargeVideoOrSubtitleFiles(rootDir) {
+  const LARGE_VIDEO_MIN_BYTES = 10 * 1024 * 1024;
+  const queue = [path.resolve(rootDir)];
+  while (queue.length > 0) {
+    const dir = queue.pop();
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        queue.push(full);
+        continue;
+      }
+      if (!entry.isFile()) {
+        continue;
+      }
+      const ext = path.extname(entry.name).toLowerCase();
+      if (SUBTITLE_EXTENSIONS.has(ext)) {
+        return true;
+      }
+      if (!VIDEO_EXTENSIONS.has(ext)) {
+        continue;
+      }
+      let stat;
+      try {
+        stat = await fs.stat(full);
+      } catch {
+        continue;
+      }
+      if (stat.isFile() && stat.size > LARGE_VIDEO_MIN_BYTES) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 async function applyTask(task) {
   const result = {
     taskId: task.id,
@@ -1582,8 +1694,12 @@ async function applyTask(task) {
       task.currentApplyFileBytesDone = 0;
       await saveTask(task);
       const sourceParentDir = path.dirname(entry.sourcePath);
+
+      // 1) Finalize rename + target structure first.
       const finalPath = await uniquePath(entry.target.fullPath);
       await ensureParentDir(finalPath);
+
+      // 2) Move video file.
       let movedBytesForCurrent = 0;
       let lastSavedAt = Date.now();
       await moveFileWithFallback(entry.sourcePath, finalPath, async (chunkBytes) => {
@@ -1598,7 +1714,10 @@ async function applyTask(task) {
       task.currentApplyFileBytesDone = task.currentApplyFileBytes;
       const movedSubtitles = await moveSidecarSubtitles(entry, finalPath);
       await cleanupProcessedEntrySourceDirs(entry, movedSubtitles, task.inputDir);
-      if (isWithinDir(sourceParentDir, task.inputDir) && sourceParentDir !== path.resolve(task.inputDir)) {
+
+      // 3) Remove the source container folder at the end (if safe).
+      const removedContainerDir = await removeVideoContainerFolderIfExists(entry, task.inputDir);
+      if (!removedContainerDir && isWithinDir(sourceParentDir, task.inputDir) && sourceParentDir !== path.resolve(task.inputDir)) {
         await removeEmptyParentDirs(sourceParentDir, task.inputDir);
       }
       entry.status = 'success';
@@ -1610,7 +1729,8 @@ async function applyTask(task) {
         entryId: entry.id,
         status: 'success',
         to: finalPath,
-        subtitlesMoved: movedSubtitles.length
+        subtitlesMoved: movedSubtitles.length,
+        sourceContainerRemoved: removedContainerDir
       });
       task.applyDone += 1;
       task.applyBytesDone += toSafeInt(entry.size) || 0;
@@ -1740,6 +1860,7 @@ app.post('/api/tasks/:id/recompute', async (req, res) => {
       entry.edited.year = toSafeInt(up.year) || null;
       entry.edited.type = ['movie', 'tv', 'anime', 'show'].includes(up.type) ? up.type : entry.edited.type;
       entry.edited.season = toSafeInt(up.season) || null;
+      entry.edited.librarySeason = toSafeInt(up.librarySeason) || entry.edited.librarySeason || entry.edited.season || null;
       entry.edited.episode = toSafeInt(up.episode) || null;
       entry.selected = Boolean(up.selected);
     }
