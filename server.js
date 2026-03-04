@@ -711,12 +711,12 @@ function getTypeHintForMetadata(typeHint) {
   return 'multi';
 }
 
-async function inferChineseTitleByMetadata(title, context = {}) {
+async function inferMetadataByTMDB(title, context = {}) {
   const apiKey = process.env.TMDB_API_KEY || '';
   const apiBase = (process.env.TMDB_API_BASE || 'https://api.themoviedb.org/3').replace(/\/$/, '');
   const cleanTitle = cleanName(title || '');
-  if (!apiKey || !cleanTitle || hasChinese(cleanTitle)) {
-    return null;
+  if (!apiKey || !cleanTitle) {
+    return { zhTitle: null, type: null, year: null };
   }
 
   const typeHint = ['movie', 'tv', 'anime', 'show'].includes(context.typeHint) ? context.typeHint : 'tv';
@@ -739,7 +739,7 @@ async function inferChineseTitleByMetadata(title, context = {}) {
     const data = await resp.json();
     const results = Array.isArray(data?.results) ? data.results : [];
     if (results.length === 0) {
-      return null;
+      return { zhTitle: null, type: null, year: null };
     }
 
     const scored = results
@@ -758,18 +758,29 @@ async function inferChineseTitleByMetadata(title, context = {}) {
         if ((typeHint === 'tv' || typeHint === 'show' || typeHint === 'anime') && mediaType === 'tv') score += 2;
         if (yearHint && releaseYear && Math.abs(yearHint - releaseYear) <= 1) score += 1;
         if (typeHint === 'anime' && genreIds.includes(16)) score += 2;
-        return { zhName, score };
+        return { zhName, mediaType, releaseYear, genreIds, score };
       })
       .sort((a, b) => b.score - a.score);
 
     const best = scored[0];
-    if (!best || best.score < 4 || !best.zhName || !hasChinese(best.zhName)) {
-      return null;
+    if (!best || best.score < 4) {
+      return { zhTitle: null, type: null, year: null };
     }
-    return best.zhName;
+    let mappedType = null;
+    if (best.mediaType === 'movie') {
+      mappedType = best.genreIds.includes(16) ? 'anime' : 'movie';
+    } else if (best.mediaType === 'tv') {
+      mappedType = best.genreIds.includes(16) ? 'anime' : 'tv';
+    }
+    const zhTitle = best.zhName && hasChinese(best.zhName) ? best.zhName : null;
+    return {
+      zhTitle,
+      type: ['movie', 'tv', 'anime', 'show'].includes(mappedType) ? mappedType : null,
+      year: best.releaseYear || null
+    };
   } catch (err) {
-    await logLine(`[WARN] metadata zh title fallback for ${cleanTitle}: ${err.message}`);
-    return null;
+    await logLine(`[WARN] metadata lookup fallback for ${cleanTitle}: ${err.message}`);
+    return { zhTitle: null, type: null, year: null };
   }
 }
 
@@ -1118,19 +1129,19 @@ async function createTask({ inputDir, outputDir, taskId = crypto.randomUUID(), o
   });
   task.scanTotal = preItems.length;
   await pushProgress();
-  const metadataZhTitleCache = new Map();
+  const metadataInfoCache = new Map();
 
-  async function resolveMetadataZhTitle(englishTitle, context = {}) {
+  async function resolveMetadataInfo(queryTitle, context = {}) {
     const k = [
-      cleanName(englishTitle || '').toLowerCase(),
+      cleanName(queryTitle || '').toLowerCase(),
       context.typeHint || '',
       toSafeInt(context.yearHint) || 0
     ].join('::');
-    if (metadataZhTitleCache.has(k)) {
-      return metadataZhTitleCache.get(k);
+    if (metadataInfoCache.has(k)) {
+      return metadataInfoCache.get(k);
     }
-    const p = inferChineseTitleByMetadata(englishTitle, context);
-    metadataZhTitleCache.set(k, p);
+    const p = inferMetadataByTMDB(queryTitle, context);
+    metadataInfoCache.set(k, p);
     return p;
   }
 
@@ -1147,6 +1158,7 @@ async function createTask({ inputDir, outputDir, taskId = crypto.randomUUID(), o
     const englishOnlyRef = hasEn && !hasZh
       ? preferredTitleBase
       : extractEnglishTitleCandidate(item.seriesHintName, item.basename, item.heuristic.title);
+    const metadataQueryTitle = englishOnlyRef || preferredTitleBase;
 
     if (TITLE_LANGUAGE === 'zh') {
       if (hasZh && hasEn) {
@@ -1155,24 +1167,24 @@ async function createTask({ inputDir, outputDir, taskId = crypto.randomUUID(), o
           normalizedTitle = chineseOnly;
           source = 'cleaner-mixed-zh';
         }
-      } else if (!hasZh && hasEn) {
-        const zhTitle = await resolveMetadataZhTitle(preferredTitleBase, {
-          typeHint: item.heuristic.type,
-          yearHint: item.heuristic.year,
-          seasonHint: item.heuristic.season,
-          episodeHint: item.heuristic.episode
-        });
-        if (zhTitle) {
-          normalizedTitle = zhTitle;
-          source = 'metadata-zh';
-        }
       }
+    }
+
+    const metadata = await resolveMetadataInfo(metadataQueryTitle, {
+      typeHint: item.heuristic.type,
+      yearHint: item.heuristic.year,
+      seasonHint: item.heuristic.season,
+      episodeHint: item.heuristic.episode
+    });
+    if (TITLE_LANGUAGE === 'zh' && !hasZh && hasEn && metadata.zhTitle) {
+      normalizedTitle = metadata.zhTitle;
+      source = 'metadata-zh';
     }
 
     const ai = {
       title: normalizedTitle || preferredTitleBase || item.basename.replace(/\.[^.]+$/, ''),
-      year: item.heuristic.year || null,
-      type: item.heuristic.type || 'movie',
+      year: item.heuristic.year || metadata.year || null,
+      type: metadata.type || item.heuristic.type || 'movie',
       season: item.heuristic.season || null,
       episode: item.heuristic.episode || null,
       confidence: 0.6,
