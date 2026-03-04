@@ -624,6 +624,36 @@ function looksEnglishTitle(text) {
   return /[A-Za-z]/.test(text);
 }
 
+function extractEnglishTitleCandidate(...hints) {
+  for (const hint of hints) {
+    let t = cleanName(String(hint || ''));
+    if (!t) {
+      continue;
+    }
+    t = t
+      .replace(/[\[\]\(\)\{\}]/g, ' ')
+      .replace(/\b(?:2160p|1080p|720p|480p|4k|8k|x264|x265|h264|h265|hevc|avc|aac|flac|big5|gb|chs|cht|end|complete|batch|mp4|mkv|webrip|web[\s-]?dl|bluray|bdrip|remux)\b/gi, ' ')
+      .replace(/\b(?:s\d{1,2}e\d{1,3}|ep?\s*\d{1,3}|season\s*\d{1,2})\b/gi, ' ')
+      .replace(/第\s*\d{1,3}\s*[集话話]/gi, ' ');
+    t = cleanName(t);
+    if (!looksEnglishTitle(t)) {
+      continue;
+    }
+    let words = t.split(/\s+/).filter((w) => /[A-Za-z]/.test(w) && !/^\d+$/.test(w));
+    if (words.length >= 2 && /^[A-Z0-9]{2,6}$/.test(words[0])) {
+      words = words.slice(1);
+    }
+    const candidate = cleanName(words.join(' '));
+    if (!candidate) {
+      continue;
+    }
+    if (candidate.split(/\s+/).length >= 2) {
+      return candidate;
+    }
+  }
+  return '';
+}
+
 function isCompleteChineseRecognition(meta) {
   return Boolean(meta && hasChinese(meta.title) && toSafeInt(meta.year));
 }
@@ -990,19 +1020,29 @@ async function createTask({ inputDir, outputDir, taskId = crypto.randomUUID(), o
       }
     }
 
-    if (TITLE_LANGUAGE === 'zh' && looksEnglishTitle(ai.title)) {
-      const zhTitle = await resolveChineseTitle(ai.title, {
-        typeHint: ai.type,
-        yearHint: ai.year,
-        folderHint: item.seriesHintName,
-        cleanedFolderHint: item.seriesHintHeuristic.title,
-        fileNameHint: item.basename,
-        cleanedFileHint: item.heuristic.title,
-        seasonHint: ai.season,
-        episodeHint: ai.episode
-      });
-      if (zhTitle) {
-        ai.title = zhTitle;
+    if (TITLE_LANGUAGE === 'zh') {
+      const englishRefTitle = looksEnglishTitle(ai.title)
+        ? ai.title
+        : extractEnglishTitleCandidate(
+            item.seriesHintHeuristic.title,
+            item.heuristic.title,
+            item.seriesHintName,
+            item.basename
+          );
+      if (englishRefTitle) {
+        const zhTitle = await resolveChineseTitle(englishRefTitle, {
+          typeHint: ai.type,
+          yearHint: ai.year,
+          folderHint: item.seriesHintName,
+          cleanedFolderHint: item.seriesHintHeuristic.title,
+          fileNameHint: item.basename,
+          cleanedFileHint: item.heuristic.title,
+          seasonHint: ai.season,
+          episodeHint: ai.episode
+        });
+        if (zhTitle) {
+          ai.title = zhTitle;
+        }
       }
     }
 
