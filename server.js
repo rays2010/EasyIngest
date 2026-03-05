@@ -663,7 +663,7 @@ async function recognizeNameWithCurrentStrategy({
     folderHeuristic.title || fileHeuristic.title || basename.replace(/\.[^.]+$/, '')
   );
   const hasZh = hasChinese(preferredTitleBase);
-  const hasEn = looksEnglishTitle(preferredTitleBase);
+  const hasEn = /[A-Za-z]/.test(preferredTitleBase);
   let normalizedTitle = preferredTitleBase;
   let source = 'cleaner';
   const englishOnlyRef = hasEn && !hasZh
@@ -686,7 +686,7 @@ async function recognizeNameWithCurrentStrategy({
     episodeHint: fileHeuristic.episode
   });
 
-  if (TITLE_LANGUAGE === 'zh' && !hasZh && hasEn && metadata.zhTitle) {
+  if (TITLE_LANGUAGE === 'zh' && hasEn && metadata.zhTitle) {
     normalizedTitle = metadata.zhTitle;
     source = 'metadata-zh';
   }
@@ -743,12 +743,27 @@ function extractEnglishTitleCandidate(...hints) {
     }
     t = t
       .replace(/[\[\]\(\)\{\}]/g, ' ')
+      .replace(/[._]+/g, ' ')
       .replace(/\b(?:2160p|1080p|720p|480p|4k|8k|x264|x265|h264|h265|hevc|avc|aac|flac|big5|gb|chs|cht|end|complete|batch|mp4|mkv|webrip|web[\s-]?dl|bluray|bdrip|remux)\b/gi, ' ')
       .replace(/\b(?:s\d{1,2}e\d{1,3}|ep?\s*\d{1,3}|season\s*\d{1,2})\b/gi, ' ')
-      .replace(/第\s*\d{1,3}\s*[集话話]/gi, ' ');
+      .replace(/第\s*\d{1,3}\s*[集话話]/gi, ' ')
+      .replace(/\b(?:eng|english|sub|subs|multi)\b/gi, ' ')
+      .replace(/https?:\/\/\S+/gi, ' ')
+      .replace(/www\.[^\s]+/gi, ' ')
+      .replace(/\b[A-Za-z0-9-]+\.(?:com|net|org|cc|tv|xyz|top|cn|io)\b/gi, ' ');
+    t = t.replace(/[\u4e00-\u9fff]+/g, ' ');
+    t = t.replace(/\b(?:www|com|net|org|io|cc|tv|xyz|top|cn)\b/gi, ' ');
     t = cleanName(t);
-    if (!looksEnglishTitle(t)) {
+    if (!/[A-Za-z]/.test(t)) {
       continue;
+    }
+    const titleCaseMatches = t.match(/[A-Z][A-Za-z0-9']*(?:\s+[A-Z][A-Za-z0-9']*)*/g) || [];
+    const bestTitleCase = titleCaseMatches
+      .map((s) => cleanName(s))
+      .filter(Boolean)
+      .sort((a, b) => b.length - a.length)[0];
+    if (bestTitleCase && bestTitleCase.split(/\s+/).length >= 2) {
+      return bestTitleCase;
     }
     let words = t.split(/\s+/).filter((w) => /[A-Za-z]/.test(w) && !/^\d+$/.test(w));
     if (words.length >= 2 && /^[A-Z0-9]{2,6}$/.test(words[0])) {
