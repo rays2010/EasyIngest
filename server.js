@@ -131,6 +131,9 @@ const archiveExtractCache = new Map();
 
 app.use(express.json({ limit: '5mb' }));
 app.use(express.static(path.join(WORK_DIR, 'public')));
+app.get('/debug', (req, res) => {
+  res.sendFile(path.join(WORK_DIR, 'public', 'debug.html'));
+});
 
 app.get('/api/config', (req, res) => {
   res.json({
@@ -246,9 +249,19 @@ function stripNoiseTokens(text) {
   // Remove common release wrappers and web/source noise.
   t = t.replace(/\[[^\]]*(?:www|https?|com|net|org|cc|tv|论坛|发布|字幕组|电影|资源)[^\]]*\]/gi, ' ');
   t = t.replace(/\[[^\]]*(?:www\.|https?:\/\/|\.com|\.net|\.org|\.cc|\.tv|最新网址|论坛|字幕组)[^\]]*\]/gi, ' ');
+  // Remove catalog/group tags like [JP-318], [Group丨JP-318] that are often non-title junk.
+  t = t.replace(/\[[^\]]*\b[A-Za-z]{1,8}-\d{2,6}\b[^\]]*\]/g, ' ');
+  // Remove repeated leading bracket tags, e.g. [Group][Release]Title...
+  t = t.replace(/^\s*(?:\[[^\]]*(?:[丨|｜]|发布|原创|字幕|压制|搬运)[^\]]*\]\s*)+/g, ' ');
+  // Remove trailing fansub/release group tags, e.g. [MingY&7³ACG].
+  t = t.replace(/\s*\[[^\]]*(?:acg|字幕组|sub|subs|raw|rip|team|group)\s*[^\]]*\]\s*$/gi, ' ');
+  // Truncate common ad tails appended after titles.
+  t = t.replace(/(?:地址发布页|收藏不迷路|备用网址|最新域名|论坛发布页).*/gi, ' ');
   t = t.replace(/\([^\)]*(?:www\.|https?:\/\/|\.com|\.net|\.org|\.cc|\.tv)[^\)]*\)/gi, ' ');
   t = t.replace(/https?:\/\/\S+/gi, ' ');
   t = t.replace(/www\.[^\s]+/gi, ' ');
+  t = t.replace(/\b(?:dygod)\b/gi, ' ');
+  t = t.replace(/(?:6v电影|6v|电影天堂|bt之家|迅雷下载|地址发布页)/gi, ' ');
   t = t.replace(/\b[A-Za-z0-9-]+\.(?:com|net|org|cc|tv|xyz|top|cn)\b/gi, ' ');
   t = t.replace(/(?:高清)?剧集网发布|剧集网|资源网|最新网址/gi, ' ');
 
@@ -635,6 +648,80 @@ function buildSeriesGroupKey(heuristic) {
   const year = toSafeInt(heuristic.year) || 0;
   const season = toSafeInt(heuristic.season) || 1;
   return `${baseTitle}::${year}::s${season}`;
+}
+
+async function recognizeNameWithCurrentStrategy({
+  basename,
+  seriesHintName = '',
+  heuristic = null,
+  seriesHintHeuristic = null,
+  resolveMetadataInfo
+}) {
+  const fileHeuristic = heuristic || parseByHeuristic(basename);
+  const folderHeuristic = seriesHintHeuristic || parseByHeuristic(seriesHintName);
+  const preferredTitleBase = cleanName(
+    folderHeuristic.title || fileHeuristic.title || basename.replace(/\.[^.]+$/, '')
+  );
+  const hasZh = hasChinese(preferredTitleBase);
+  const hasEn = looksEnglishTitle(preferredTitleBase);
+  let normalizedTitle = preferredTitleBase;
+  let source = 'cleaner';
+  const englishOnlyRef = hasEn && !hasZh
+    ? preferredTitleBase
+    : extractEnglishTitleCandidate(seriesHintName, basename, fileHeuristic.title);
+  const metadataQueryTitle = englishOnlyRef || preferredTitleBase;
+
+  if (TITLE_LANGUAGE === 'zh' && hasZh && hasEn) {
+    const chineseOnly = extractChineseOnlyTitle(preferredTitleBase);
+    if (chineseOnly) {
+      normalizedTitle = chineseOnly;
+      source = 'cleaner-mixed-zh';
+    }
+  }
+
+  const metadata = await resolveMetadataInfo(metadataQueryTitle, {
+    typeHint: fileHeuristic.type,
+    yearHint: fileHeuristic.year,
+    seasonHint: fileHeuristic.season,
+    episodeHint: fileHeuristic.episode
+  });
+
+  if (TITLE_LANGUAGE === 'zh' && !hasZh && hasEn && metadata.zhTitle) {
+    normalizedTitle = metadata.zhTitle;
+    source = 'metadata-zh';
+  }
+
+  const ai = {
+    title: normalizedTitle || preferredTitleBase || basename.replace(/\.[^.]+$/, ''),
+    year: fileHeuristic.year || metadata.year || null,
+    type: metadata.type || fileHeuristic.type || 'movie',
+    season: fileHeuristic.season || null,
+    episode: fileHeuristic.episode || null,
+    confidence: 0.6,
+    source,
+    englishRef: englishOnlyRef || null
+  };
+
+  return {
+    ai,
+    debug: {
+      originalName: basename,
+      folderHintName: seriesHintName || '',
+      fileHeuristic,
+      folderHeuristic,
+      dirtyProcessed: preferredTitleBase,
+      normalizedTitle,
+      metadataQueryTitle,
+      metadata,
+      stages: {
+        original: basename,
+        cleaned: preferredTitleBase,
+        resolvedTitle: ai.title,
+        year: ai.year,
+        type: ai.type
+      }
+    }
+  };
 }
 
 function hasChinese(text) {
@@ -1148,49 +1235,13 @@ async function createTask({ inputDir, outputDir, taskId = crypto.randomUUID(), o
   for (const item of preItems) {
     task.currentFile = item.basename;
     await pushProgress();
-    const preferredTitleBase = cleanName(
-      item.seriesHintHeuristic.title || item.heuristic.title || item.basename.replace(/\.[^.]+$/, '')
-    );
-    const hasZh = hasChinese(preferredTitleBase);
-    const hasEn = looksEnglishTitle(preferredTitleBase);
-    let normalizedTitle = preferredTitleBase;
-    let source = 'cleaner';
-    const englishOnlyRef = hasEn && !hasZh
-      ? preferredTitleBase
-      : extractEnglishTitleCandidate(item.seriesHintName, item.basename, item.heuristic.title);
-    const metadataQueryTitle = englishOnlyRef || preferredTitleBase;
-
-    if (TITLE_LANGUAGE === 'zh') {
-      if (hasZh && hasEn) {
-        const chineseOnly = extractChineseOnlyTitle(preferredTitleBase);
-        if (chineseOnly) {
-          normalizedTitle = chineseOnly;
-          source = 'cleaner-mixed-zh';
-        }
-      }
-    }
-
-    const metadata = await resolveMetadataInfo(metadataQueryTitle, {
-      typeHint: item.heuristic.type,
-      yearHint: item.heuristic.year,
-      seasonHint: item.heuristic.season,
-      episodeHint: item.heuristic.episode
+    const { ai } = await recognizeNameWithCurrentStrategy({
+      basename: item.basename,
+      seriesHintName: item.seriesHintName,
+      heuristic: item.heuristic,
+      seriesHintHeuristic: item.seriesHintHeuristic,
+      resolveMetadataInfo
     });
-    if (TITLE_LANGUAGE === 'zh' && !hasZh && hasEn && metadata.zhTitle) {
-      normalizedTitle = metadata.zhTitle;
-      source = 'metadata-zh';
-    }
-
-    const ai = {
-      title: normalizedTitle || preferredTitleBase || item.basename.replace(/\.[^.]+$/, ''),
-      year: item.heuristic.year || metadata.year || null,
-      type: metadata.type || item.heuristic.type || 'movie',
-      season: item.heuristic.season || null,
-      episode: item.heuristic.episode || null,
-      confidence: 0.6,
-      source,
-      englishRef: englishOnlyRef || null
-    };
 
     const entry = {
       id: crypto.randomUUID(),
@@ -1232,6 +1283,68 @@ async function createTask({ inputDir, outputDir, taskId = crypto.randomUUID(), o
   await pushProgress();
   return task;
 }
+
+app.post('/api/debug/recognize', async (req, res) => {
+  try {
+    const filename = cleanName(String(req.body?.filename || ''));
+    const folderHintName = cleanName(String(req.body?.folderHint || ''));
+    if (!filename) {
+      return res.status(400).json({ error: 'filename is required' });
+    }
+
+    const metadataInfoCache = new Map();
+    async function resolveMetadataInfo(queryTitle, context = {}) {
+      const k = [
+        cleanName(queryTitle || '').toLowerCase(),
+        context.typeHint || '',
+        toSafeInt(context.yearHint) || 0
+      ].join('::');
+      if (metadataInfoCache.has(k)) {
+        return metadataInfoCache.get(k);
+      }
+      const p = inferMetadataByTMDB(queryTitle, context);
+      metadataInfoCache.set(k, p);
+      return p;
+    }
+
+    const out = await recognizeNameWithCurrentStrategy({
+      basename: filename,
+      seriesHintName: folderHintName,
+      resolveMetadataInfo
+    });
+    const tmdbQuery = cleanName(out?.debug?.metadataQueryTitle || '');
+    const hasTmdbKey = Boolean(cleanName(process.env.TMDB_API_KEY || ''));
+    const metadata = out?.debug?.metadata || {};
+    const tmdbHit = Boolean(metadata.zhTitle || metadata.type || metadata.year);
+    const tmdbAttempted = Boolean(hasTmdbKey && tmdbQuery);
+    const tmdbStatus = !hasTmdbKey
+      ? 'disabled-no-key'
+      : !tmdbQuery
+        ? 'skipped-empty-query'
+        : tmdbHit
+          ? 'hit'
+          : 'miss-or-failed';
+    out.debug.tmdb = {
+      participated: tmdbAttempted,
+      status: tmdbStatus,
+      query: tmdbQuery,
+      hit: tmdbHit
+    };
+
+    return res.json({
+      ok: true,
+      input: {
+        filename,
+        folderHintName
+      },
+      result: out.ai,
+      debug: out.debug
+    });
+  } catch (err) {
+    await logLine(`[ERROR] /api/debug/recognize failed: ${err.message}`);
+    return res.status(500).json({ error: err.message });
+  }
+});
 
 async function ensureParentDir(filePath) {
   await fs.mkdir(path.dirname(filePath), { recursive: true });

@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>EasyIngest 识别调试</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main>
+      <h1>影片识别调试</h1>
+      <section class="card">
+        <div class="row">
+          <label>测试文件名</label>
+          <input id="filename" placeholder="例如: The.Matrix.1999.1080p.BluRay.x264.mkv" />
+        </div>
+        <div class="row">
+          <label>目录提示(可选)</label>
+          <input id="folderHint" placeholder="例如: Matrix Collection" />
+        </div>
+        <div class="actions">
+          <button id="debugBtn">开始识别</button>
+          <a class="link-btn" href="/">返回主页面</a>
+        </div>
+        <p id="debugSummary"></p>
+      </section>
+
+      <section class="card">
+        <h2>关键阶段</h2>
+        <table class="debug-table">
+          <tbody>
+            <tr><th>原名</th><td id="stageOriginal">-</td></tr>
+            <tr><th>脏数据处理</th><td id="stageCleaned">-</td></tr>
+            <tr><th>获得正确名称</th><td id="stageResolved">-</td></tr>
+            <tr><th>时间</th><td id="stageYear">-</td></tr>
+            <tr><th>分类</th><td id="stageType">-</td></tr>
+            <tr><th>TMDB参与</th><td id="stageTmdb">-</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="card">
+        <h2>完整结果</h2>
+        <pre id="rawResult">-</pre>
+      </section>
+    </main>
+
+    <script src="/debug.js"></script>
+  </body>
+</html>

@@ -70,6 +70,22 @@ button[disabled] {
   display: flex;
   gap: 10px;
   margin-top: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.link-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  text-decoration: none;
+  background: #fff;
+  font-size: 14px;
 }
 
 .progress-wrap {
@@ -139,4 +155,22 @@ td select {
 pre {
   margin: 0;
   white-space: pre-wrap;
+}
+
+.debug-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 0;
+}
+
+.debug-table th,
+.debug-table td {
+  border-bottom: 1px solid #ece6d8;
+  text-align: left;
+  padding: 8px;
+  font-size: 14px;
+}
+
+.debug-table th {
+  width: 180px;
 }
